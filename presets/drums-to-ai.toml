@@ -1,0 +1,18 @@
+# Drums to AI preset
+# Optimized for drum samples: transient detection, shorter durations, more training
+
+[split]
+mode = "transient"
+delta = 0.1          # Higher sensitivity for crisp transients
+min_length = 0.05    # Allow very short hits
+max_length = 2.0     # Cap at 2 seconds
+
+[preprocess]
+augment = true       # Generate more training data
+max_duration = 2.0   # 2 second samples
+
+[train]
+epochs = 150         # More training for drum timbres
+
+[generate]
+count = 20           # Generate a decent batch

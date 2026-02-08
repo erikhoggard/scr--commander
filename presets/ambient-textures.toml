@@ -1,0 +1,19 @@
+# Ambient Textures preset
+# Optimized for ambient/drone samples: texture gating, longer durations
+
+[split]
+mode = "texture"
+min_duration = 2.0        # Minimum 2 second textures
+max_duration = 10.0       # Up to 10 seconds
+rms_threshold = 0.08      # Lower threshold for quiet passages
+stability_threshold = 0.2 # More tolerance for spectral variation
+
+[preprocess]
+augment = false      # Textures don't augment well
+max_duration = 8.0   # Longer samples for ambient
+
+[train]
+epochs = 200         # More training for complex textures
+
+[generate]
+count = 10           # Fewer but longer samples
