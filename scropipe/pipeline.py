@@ -19,6 +19,10 @@ from .stages import (
     StageResult,
     TrainStage,
     TrainVocoderStage,
+    RavePreprocessStage,
+    RaveTrainStage,
+    RaveExportStage,
+    RaveGenerateStage,
 )
 
 console = Console()
@@ -231,6 +235,8 @@ class Pipeline:
         count: int = 10,
         train_vocoder: bool = False,
         vocoder_epochs: int = 50,
+        model: str = "vae",
+        rave_config: str = "v2",
         **split_kwargs,
     ) -> bool:
         """Run the complete pipeline.
@@ -242,8 +248,10 @@ class Pipeline:
             max_duration: Maximum sample duration for preprocessing.
             epochs: Training epochs.
             count: Number of samples to generate.
-            train_vocoder: Whether to train HiFi-GAN vocoder.
+            train_vocoder: Whether to train HiFi-GAN vocoder (VAE only).
             vocoder_epochs: Vocoder training epochs.
+            model: Model type ('vae' or 'rave').
+            rave_config: RAVE config (v2, v2_small, etc.).
             **split_kwargs: Additional arguments for split stage.
 
         Returns:
@@ -266,8 +274,17 @@ class Pipeline:
             "count": count,
             "train_vocoder": train_vocoder,
             "vocoder_epochs": vocoder_epochs,
+            "model": model,
+            "rave_config": rave_config,
             **split_kwargs,
         }
+
+        # Check model type
+        use_rave = model.lower() == "rave"
+        if use_rave:
+            console.print("[bold blue]Using RAVE model (high-quality melodic synthesis)[/bold blue]")
+        else:
+            console.print("[bold blue]Using VAE model[/bold blue]")
         self.state.save(self.state_file)
 
         # Build input description
@@ -360,12 +377,33 @@ class Pipeline:
             self._print_summary()
             return True
 
-        # Stage 3: Preprocess
         pool_output = self._get_stage_output("collect")
         if not pool_output:
             console.print("[red]Cannot find pool output[/red]")
             return False
 
+        if use_rave:
+            # RAVE pipeline (for melodic/harmonic content)
+            return self._run_rave_synthesis(pool_output, epochs, count, rave_config)
+        else:
+            # VAE pipeline (for percussion/textures)
+            return self._run_vae_synthesis(
+                pool_output, augment, max_duration, epochs, count,
+                train_vocoder, vocoder_epochs
+            )
+
+    def _run_vae_synthesis(
+        self,
+        pool_output: Path,
+        augment: bool,
+        max_duration: float,
+        epochs: int,
+        count: int,
+        train_vocoder: bool,
+        vocoder_epochs: int,
+    ) -> bool:
+        """Run VAE synthesis pipeline."""
+        # Stage 3: Preprocess
         if self._should_run_stage("preprocess"):
             console.print("[bold]Stage 3: Preprocess[/bold]")
             self._update_stage_state("preprocess", StageStatus.RUNNING)
@@ -472,6 +510,95 @@ class Pipeline:
             console.print()
         else:
             console.print("[dim]Stage 6: Generate (already completed)[/dim]")
+
+        self._print_summary()
+        return True
+
+    def _run_rave_synthesis(
+        self,
+        pool_output: Path,
+        epochs: int,
+        count: int,
+        rave_config: str,
+    ) -> bool:
+        """Run RAVE synthesis pipeline for melodic/harmonic content."""
+        # Stage 3: RAVE Preprocess
+        rave_preprocess = RavePreprocessStage(self.output_base)
+        console.print("[bold]Stage 3: RAVE Preprocess[/bold]")
+        self._update_stage_state("rave_preprocess", StageStatus.RUNNING)
+
+        result = rave_preprocess.run(input_dir=pool_output)
+
+        if not result.success:
+            self._update_stage_state("rave_preprocess", StageStatus.FAILED, result)
+            console.print(f"[red]RAVE preprocess failed: {result.message}[/red]")
+            return False
+
+        self._update_stage_state("rave_preprocess", StageStatus.COMPLETED, result)
+        console.print()
+
+        # Stage 4: RAVE Train
+        rave_train = RaveTrainStage(self.output_base)
+        console.print("[bold]Stage 4: RAVE Train (this takes several hours)[/bold]")
+        self._update_stage_state("rave_train", StageStatus.RUNNING)
+
+        result = rave_train.run(
+            data_dir=rave_preprocess.output_dir,
+            config=rave_config,
+            epochs=epochs if epochs != 100 else None,
+        )
+
+        if not result.success:
+            self._update_stage_state("rave_train", StageStatus.FAILED, result)
+            console.print(f"[red]RAVE training failed: {result.message}[/red]")
+            return False
+
+        self._update_stage_state("rave_train", StageStatus.COMPLETED, result)
+        console.print()
+
+        # Stage 5: RAVE Export
+        rave_export = RaveExportStage(self.output_base)
+        console.print("[bold]Stage 5: RAVE Export[/bold]")
+        self._update_stage_state("rave_export", StageStatus.RUNNING)
+
+        result = rave_export.run(run_dir=rave_train.output_dir)
+
+        if not result.success:
+            self._update_stage_state("rave_export", StageStatus.FAILED, result)
+            console.print(f"[red]RAVE export failed: {result.message}[/red]")
+            return False
+
+        self._update_stage_state("rave_export", StageStatus.COMPLETED, result)
+        console.print()
+
+        # Find exported model
+        model_path = None
+        for ts_file in rave_train.output_dir.glob("**/*.ts"):
+            model_path = ts_file
+            break
+
+        if not model_path:
+            console.print("[red]Could not find exported RAVE model[/red]")
+            return False
+
+        # Stage 6: RAVE Generate
+        rave_generate = RaveGenerateStage(self.output_base)
+        console.print("[bold]Stage 6: RAVE Generate[/bold]")
+        self._update_stage_state("rave_generate", StageStatus.RUNNING)
+
+        result = rave_generate.run(
+            model_path=model_path,
+            input_dir=pool_output,
+            count=count,
+        )
+
+        if not result.success:
+            self._update_stage_state("rave_generate", StageStatus.FAILED, result)
+            console.print(f"[red]RAVE generation failed: {result.message}[/red]")
+            return False
+
+        self._update_stage_state("rave_generate", StageStatus.COMPLETED, result)
+        console.print()
 
         self._print_summary()
         return True

@@ -9,7 +9,10 @@ from rich.console import Console
 
 from . import __version__
 from .pipeline import Pipeline
-from .stages import CollectStage, GenerateStage, PreprocessStage, SplitStage, TrainStage, TrainVocoderStage
+from .stages import (
+    CollectStage, GenerateStage, PreprocessStage, SplitStage, TrainStage, TrainVocoderStage,
+    RavePreprocessStage, RaveTrainStage, RaveExportStage, RaveGenerateStage,
+)
 from .utils.discovery import check_tools_available, find_all_tools
 
 app = typer.Typer(
@@ -117,11 +120,19 @@ def run(
     ),
     train_vocoder: bool = typer.Option(
         False, "--train-vocoder",
-        help="Train HiFi-GAN vocoder for higher quality output",
+        help="Train HiFi-GAN vocoder for higher quality output (VAE only)",
     ),
     vocoder_epochs: int = typer.Option(
         50, "--vocoder-epochs",
         help="Vocoder training epochs (only with --train-vocoder)",
+    ),
+    model: str = typer.Option(
+        "vae", "--model", "-m",
+        help="Model type: 'vae' (fast, good for percussion) or 'rave' (slow, better for melodic)",
+    ),
+    rave_config: str = typer.Option(
+        "v2", "--rave-config",
+        help="RAVE config: v2, v2_small, discrete (only with --model rave)",
     ),
     # Preset
     preset: Optional[str] = typer.Option(
@@ -253,6 +264,8 @@ def run(
         count=final_count,
         train_vocoder=train_vocoder,
         vocoder_epochs=vocoder_epochs,
+        model=model,
+        rave_config=rave_config,
         **split_kwargs,
     )
 
@@ -388,16 +401,26 @@ def synthesize(
     ),
     train_vocoder: bool = typer.Option(
         False, "--train-vocoder",
-        help="Train HiFi-GAN vocoder for higher quality output",
+        help="Train HiFi-GAN vocoder for higher quality output (VAE only)",
     ),
     vocoder_epochs: int = typer.Option(
         50, "--vocoder-epochs",
         help="Vocoder training epochs",
     ),
+    model: str = typer.Option(
+        "vae", "--model", "-m",
+        help="Model type: 'vae' (fast) or 'rave' (slow, better for melodic)",
+    ),
+    rave_config: str = typer.Option(
+        "v2", "--rave-config",
+        help="RAVE config: v2, v2_small, discrete (only with --model rave)",
+    ),
 ):
     """Run synthesis stages on existing samples.
 
-    Preprocesses samples, trains VAE, and generates new variations.
+    Preprocesses samples, trains model, and generates new variations.
+
+    Use --model rave for melodic/harmonic content like piano.
 
     Example:
         scropipe synthesize ./samples --output ./ai-samples --count 50
@@ -410,66 +433,134 @@ def synthesize(
     output_base = output or Path.cwd() / "scropipe-synth"
     output_base.mkdir(parents=True, exist_ok=True)
 
-    # Stage 1: Preprocess
-    console.print("[bold]Preprocessing...[/bold]")
-    preprocess = PreprocessStage(output_base)
-    result = preprocess.run(
-        input_dir=input_dir,
-        augment=augment,
-        max_duration=max_duration,
-    )
+    if model.lower() == "rave":
+        # RAVE pipeline (better for melodic content)
+        console.print("[bold blue]Using RAVE model (high-quality melodic synthesis)[/bold blue]")
+        console.print()
 
-    if not result.success:
-        console.print(f"[red]Preprocess failed:[/red] {result.message}")
-        raise typer.Exit(1)
+        # Stage 1: RAVE Preprocess
+        console.print("[bold]RAVE Preprocessing...[/bold]")
+        rave_preprocess = RavePreprocessStage(output_base)
+        result = rave_preprocess.run(input_dir=input_dir)
 
-    # Stage 2: Train
-    console.print("[bold]Training...[/bold]")
-    train = TrainStage(output_base)
-    result = train.run(
-        data_dir=preprocess.output_dir,
-        epochs=epochs,
-    )
+        if not result.success:
+            console.print(f"[red]RAVE preprocess failed:[/red] {result.message}")
+            raise typer.Exit(1)
 
-    if not result.success:
-        console.print(f"[red]Training failed:[/red] {result.message}")
-        raise typer.Exit(1)
-
-    model_path = train.output_dir / "model.pth"
-    vocoder_path = None
-
-    # Stage 3 (optional): Train vocoder
-    if train_vocoder:
-        console.print("[bold]Training vocoder...[/bold]")
-        vocoder_train = TrainVocoderStage(output_base)
-        result = vocoder_train.run(
-            audio_dir=input_dir,
-            spec_dir=preprocess.output_dir,
-            epochs=vocoder_epochs,
+        # Stage 2: RAVE Train
+        console.print("[bold]RAVE Training (this takes several hours)...[/bold]")
+        rave_train = RaveTrainStage(output_base)
+        result = rave_train.run(
+            data_dir=rave_preprocess.output_dir,
+            config=rave_config,
+            epochs=epochs if epochs != 100 else None,  # Use default if not specified
         )
 
         if not result.success:
-            console.print(f"[yellow]Vocoder training failed:[/yellow] {result.message}")
-            console.print("[yellow]Falling back to Griffin-Lim[/yellow]")
-        else:
-            vocoder_path = vocoder_train.output_dir / "vocoder.pth"
+            console.print(f"[red]RAVE training failed:[/red] {result.message}")
+            raise typer.Exit(1)
 
-    # Stage 4: Generate
-    console.print("[bold]Generating...[/bold]")
-    generate = GenerateStage(output_base)
-    result = generate.run(
-        model_path=model_path,
-        count=count,
-        vocoder_path=vocoder_path,
-    )
+        # Stage 3: RAVE Export
+        console.print("[bold]Exporting RAVE model...[/bold]")
+        rave_export = RaveExportStage(output_base)
+        result = rave_export.run(run_dir=rave_train.output_dir)
 
-    if not result.success:
-        console.print(f"[red]Generation failed:[/red] {result.message}")
-        raise typer.Exit(1)
+        if not result.success:
+            console.print(f"[red]RAVE export failed:[/red] {result.message}")
+            raise typer.Exit(1)
 
-    console.print()
-    console.print(f"[green]Success![/green] Generated {count} AI samples")
-    console.print(f"[dim]Output: {generate.output_dir}[/dim]")
+        # Find exported model
+        model_path = None
+        for ts_file in rave_train.output_dir.glob("**/*.ts"):
+            model_path = ts_file
+            break
+
+        if not model_path:
+            console.print("[red]Could not find exported RAVE model[/red]")
+            raise typer.Exit(1)
+
+        # Stage 4: RAVE Generate
+        console.print("[bold]Generating with RAVE...[/bold]")
+        rave_generate = RaveGenerateStage(output_base)
+        result = rave_generate.run(
+            model_path=model_path,
+            input_dir=input_dir,
+            count=count,
+        )
+
+        if not result.success:
+            console.print(f"[red]RAVE generation failed:[/red] {result.message}")
+            raise typer.Exit(1)
+
+        console.print()
+        console.print(f"[green]Success![/green] Generated {count} RAVE samples")
+        console.print(f"[dim]Output: {rave_generate.output_dir}[/dim]")
+
+    else:
+        # VAE pipeline (faster, good for percussion)
+        console.print("[bold blue]Using VAE model[/bold blue]")
+        console.print()
+
+        # Stage 1: Preprocess
+        console.print("[bold]Preprocessing...[/bold]")
+        preprocess = PreprocessStage(output_base)
+        result = preprocess.run(
+            input_dir=input_dir,
+            augment=augment,
+            max_duration=max_duration,
+        )
+
+        if not result.success:
+            console.print(f"[red]Preprocess failed:[/red] {result.message}")
+            raise typer.Exit(1)
+
+        # Stage 2: Train
+        console.print("[bold]Training...[/bold]")
+        train = TrainStage(output_base)
+        result = train.run(
+            data_dir=preprocess.output_dir,
+            epochs=epochs,
+        )
+
+        if not result.success:
+            console.print(f"[red]Training failed:[/red] {result.message}")
+            raise typer.Exit(1)
+
+        model_path = train.output_dir / "model.pth"
+        vocoder_path = None
+
+        # Stage 3 (optional): Train vocoder
+        if train_vocoder:
+            console.print("[bold]Training vocoder...[/bold]")
+            vocoder_train = TrainVocoderStage(output_base)
+            result = vocoder_train.run(
+                audio_dir=input_dir,
+                spec_dir=preprocess.output_dir,
+                epochs=vocoder_epochs,
+            )
+
+            if not result.success:
+                console.print(f"[yellow]Vocoder training failed:[/yellow] {result.message}")
+                console.print("[yellow]Falling back to Griffin-Lim[/yellow]")
+            else:
+                vocoder_path = vocoder_train.output_dir / "vocoder.pth"
+
+        # Stage 4: Generate
+        console.print("[bold]Generating...[/bold]")
+        generate = GenerateStage(output_base)
+        result = generate.run(
+            model_path=model_path,
+            count=count,
+            vocoder_path=vocoder_path,
+        )
+
+        if not result.success:
+            console.print(f"[red]Generation failed:[/red] {result.message}")
+            raise typer.Exit(1)
+
+        console.print()
+        console.print(f"[green]Success![/green] Generated {count} AI samples")
+        console.print(f"[dim]Output: {generate.output_dir}[/dim]")
 
 
 @app.command()

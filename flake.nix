@@ -39,6 +39,14 @@
           pip
         ]);
 
+        # Runtime libraries needed for pip packages (torch, etc.)
+        runtimeLibs = with pkgs; [
+          stdenv.cc.cc.lib
+          zlib
+          zstd  # Required for PyTorch ROCm
+          libsndfile
+        ];
+
         # The scropipe package
         scropipe = pkgs.python311Packages.buildPythonApplication {
           pname = "scropipe";
@@ -82,21 +90,48 @@
               pythonEnv
               scrumplerPkg
               scronchlerPkg
+              pkgs.ffmpeg  # Required by RAVE for audio processing
               (pkgs.writeShellScriptBin "scropipe" ''
                 exec ${pythonEnv}/bin/python -m scropipe.cli "$@"
               '')
             ];
 
+            # Set library path for pip-installed packages
+            LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath runtimeLibs;
+
             shellHook = ''
               echo "Scropipe development environment"
               echo ""
+
+              export PYTHONPATH="$PWD:$PYTHONPATH"
+
+              # Setup RAVE in a local venv with ROCm GPU support
+              RAVE_VENV="$PWD/.rave-venv"
+              if [ ! -d "$RAVE_VENV" ]; then
+                echo "Setting up RAVE environment with ROCm GPU support (first time only)..."
+                python -m venv "$RAVE_VENV"
+                "$RAVE_VENV/bin/pip" install --quiet --upgrade pip
+                # Install PyTorch with ROCm 6.2 for AMD GPU support
+                "$RAVE_VENV/bin/pip" install --quiet torch torchvision torchaudio --index-url https://download.pytorch.org/whl/rocm6.2
+                "$RAVE_VENV/bin/pip" install --quiet acids-rave absl-py
+                # RAVE requires scipy 1.10.0 for kaiser function compatibility
+                "$RAVE_VENV/bin/pip" install --quiet 'scipy==1.10.0'
+                echo "RAVE with ROCm installed!"
+              fi
+              export PATH="$RAVE_VENV/bin:$PATH"
+              # Ensure venv packages take priority over Nix packages
+              RAVE_SITE="$RAVE_VENV/lib/python3.11/site-packages"
+              export PYTHONPATH="$RAVE_SITE:$PYTHONPATH"
+
+              # AMD GPU (Strix Halo gfx1151) compatibility
+              export HSA_OVERRIDE_GFX_VERSION=11.0.0
+
               echo "Available tools:"
               echo "  - scrumpler (audio splitter)"
               echo "  - scronchler (ML synthesizer)"
               echo "  - scropipe (this package)"
+              echo "  - rave (RAVE commands with GPU acceleration)"
               echo ""
-
-              export PYTHONPATH="$PWD:$PYTHONPATH"
             '';
           };
         };

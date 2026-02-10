@@ -55,7 +55,7 @@ class TrainStage(Stage):
         except Exception as e:
             return StageResult(success=False, message=str(e))
 
-        output_dir = self.ensure_output_dir()
+
         model_path = output_dir / "model.pth"
 
         # Build command

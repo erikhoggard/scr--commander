@@ -23,6 +23,7 @@ wheels/
 # Virtual environments
 .venv/
 venv/
+.rave-venv/
 ENV/
 
 # IDE

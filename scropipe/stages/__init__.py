@@ -7,6 +7,7 @@ from .preprocess import PreprocessStage
 from .train import TrainStage
 from .train_vocoder import TrainVocoderStage
 from .generate import GenerateStage
+from .rave import RavePreprocessStage, RaveTrainStage, RaveExportStage, RaveGenerateStage
 
 __all__ = [
     "Stage",
@@ -17,4 +18,8 @@ __all__ = [
     "TrainStage",
     "TrainVocoderStage",
     "GenerateStage",
+    "RavePreprocessStage",
+    "RaveTrainStage",
+    "RaveExportStage",
+    "RaveGenerateStage",
 ]

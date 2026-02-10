@@ -116,11 +116,11 @@
         "nixpkgs": "nixpkgs_2"
       },
       "locked": {
-        "lastModified": 1770497233,
-        "narHash": "sha256-iW0oWN4AvsAMttL22JkvPIPCxZH2ToQowZO0IZdz77A=",
+        "lastModified": 1770516278,
+        "narHash": "sha256-gqCu3FGYU1D921eRsx9m+q6dS1Lv8fbCOCjst+aic2g=",
         "ref": "refs/heads/main",
-        "rev": "1a281212acc2ca8e3c29aaeb08a74b976a80b1c9",
-        "revCount": 8,
+        "rev": "f28b459c3d27454443f756ebdac9debcb675474f",
+        "revCount": 11,
         "type": "git",
         "url": "file:///home/erik/dev/scronchler"
       },
