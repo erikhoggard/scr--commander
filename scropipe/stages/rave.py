@@ -132,12 +132,11 @@ class RaveTrainStage(Stage):
             gpu = _detect_gpu()
 
         # Call rave CLI directly to ensure correct n_signal
-        # Note: using --out instead of --out_path for compatibility
         cmd = [
             "rave", "train",
             "--config", config,
             "--db_path", str(data_dir),
-            "--out", str(output_dir),
+            "--out_path", str(output_dir),
             "--name", name,
             "--n_signal", str(n_signal),
         ]
