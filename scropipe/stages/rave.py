@@ -40,11 +40,11 @@ class RavePreprocessStage(Stage):
         output_dir = self.ensure_output_dir()
 
         # Call rave CLI directly
+        # Note: --channels removed as it's not supported by all RAVE versions
         cmd = [
             "rave", "preprocess",
             "--input_path", str(input_dir),
             "--output_path", str(output_dir),
-            "--channels", str(channels),
             "--num_signal", str(num_signal),
         ]
 
