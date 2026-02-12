@@ -387,6 +387,11 @@ class RaveGenerateStage(Stage):
                 details={"sample_count": generated_count},
             )
 
+        except ImportError as e:
+            return StageResult(
+                success=False,
+                message=f"ML dependencies not installed. Run: pip install scropipe[ml]\nError: {e}",
+            )
         except Exception as e:
             return StageResult(
                 success=False,

@@ -1,10 +1,8 @@
-"""Preprocess stage - wraps scronchler preprocess command."""
+"""Preprocess stage - converts audio to spectrograms using scropipe.synth."""
 
-import subprocess
+import json
 from pathlib import Path
-from typing import Optional
 
-from ..utils.discovery import find_tool
 from .base import Stage, StageResult
 
 
@@ -37,7 +35,7 @@ class PreprocessStage(Stage):
                 message=f"Input directory not found: {input_dir}",
             )
 
-        # Find WAV files (may be in subdirectories from scrumpler)
+        # Find WAV files (may be in subdirectories from splitter)
         wav_files = list(input_dir.rglob("*.wav"))
         if not wav_files:
             return StageResult(
@@ -45,67 +43,79 @@ class PreprocessStage(Stage):
                 message=f"No WAV files found in {input_dir}",
             )
 
+        # Import synth module (requires ML dependencies)
         try:
-            scronchler = find_tool("scronchler")
-        except Exception as e:
-            return StageResult(success=False, message=str(e))
+            from ..synth import audio_utils
+            import numpy as np
+        except ImportError as e:
+            return StageResult(
+                success=False,
+                message=f"ML dependencies not installed. Run: pip install scropipe[ml]\nError: {e}",
+            )
 
         output_dir = self.ensure_output_dir()
 
-        # Build command
-        cmd = [
-            str(scronchler),
-            "preprocess",
-            "-i", str(input_dir),
-            "-o", str(output_dir),
-            "--max-duration", str(max_duration),
-        ]
-
+        self.log(f"[bold blue]Preprocessing {len(wav_files)} audio files...[/bold blue]")
+        self.log(f"[dim]Max duration: {max_duration}s[/dim]")
         if augment:
-            cmd.append("--augment")
+            self.log("[dim]Augmentation enabled: 5x samples will be generated[/dim]")
 
-        try:
-            result = self.run_command(cmd, check=False)
+        processed_count = 0
+        error_count = 0
 
-            if result.returncode != 0:
-                self.log_error(f"scronchler preprocess failed: {result.stderr}")
-                return StageResult(
-                    success=False,
-                    message=f"scronchler exited with code {result.returncode}",
-                    details={"stderr": result.stderr, "stdout": result.stdout},
-                )
+        for wav_file in wav_files:
+            try:
+                # Load and standardize audio with configurable duration
+                audio = audio_utils.load_and_standardize(wav_file, max_duration)
+                base_name = wav_file.stem
 
-            # Count output files
-            npy_files = list(output_dir.glob("*.npy"))
+                # Process original
+                spec = audio_utils.audio_to_mel_spectrogram(audio)
+                np.save(output_dir / f"{base_name}.npy", spec)
+                processed_count += 1
 
-            if not npy_files:
-                return StageResult(
-                    success=False,
-                    output_dir=output_dir,
-                    message="No spectrograms generated",
-                )
+                # Process augmentations
+                if augment:
+                    for suffix, aug_audio in audio_utils.augment_audio(audio, max_duration):
+                        aug_spec = audio_utils.audio_to_mel_spectrogram(aug_audio)
+                        np.save(output_dir / f"{base_name}{suffix}.npy", aug_spec)
+                        processed_count += 1
 
-            self.log_success(f"Generated {len(npy_files)} spectrograms")
+            except Exception as e:
+                self.log(f"[yellow]Warning: Failed to process {wav_file.name}: {e}[/yellow]")
+                error_count += 1
 
+        if processed_count == 0:
             return StageResult(
-                success=True,
+                success=False,
                 output_dir=output_dir,
-                message=f"Generated {len(npy_files)} spectrograms",
-                details={
-                    "spectrogram_count": len(npy_files),
-                    "augmented": augment,
-                    "max_duration": max_duration,
-                },
+                message="No spectrograms generated",
             )
 
-        except subprocess.CalledProcessError as e:
-            return StageResult(
-                success=False,
-                message=f"Command failed: {e}",
-                details={"stderr": e.stderr if e.stderr else ""},
-            )
-        except Exception as e:
-            return StageResult(
-                success=False,
-                message=f"Unexpected error: {e}",
-            )
+        # Save metadata for train/generate to read
+        metadata = {
+            "max_duration": max_duration,
+            "sample_rate": audio_utils.SAMPLE_RATE,
+            "n_mels": audio_utils.N_MELS,
+            "n_fft": audio_utils.N_FFT,
+            "hop_length": audio_utils.HOP_LENGTH,
+            "spectrogram_shape": list(audio_utils.get_spectrogram_shape(max_duration)),
+        }
+        with open(output_dir / "metadata.json", "w") as f:
+            json.dump(metadata, f, indent=2)
+
+        self.log_success(f"Generated {processed_count} spectrograms")
+        if error_count > 0:
+            self.log(f"[yellow]Errors: {error_count} files[/yellow]")
+
+        return StageResult(
+            success=True,
+            output_dir=output_dir,
+            message=f"Generated {processed_count} spectrograms",
+            details={
+                "spectrogram_count": processed_count,
+                "augmented": augment,
+                "max_duration": max_duration,
+                "errors": error_count,
+            },
+        )

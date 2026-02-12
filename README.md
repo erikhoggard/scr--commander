@@ -1,16 +1,29 @@
 # Scropipe
 
-Audio pipeline orchestrator for splitting, collecting, and synthesizing audio samples.
+Audio pipeline for splitting, collecting, and synthesizing samples.
 
-Scropipe chains together external tools ([Scrumpler](https://github.com/erikhoggard/scrumpler) for audio splitting, [Scronchler](https://github.com/erikhoggard/scronchler) for AI synthesis) into a streamlined workflow.
+Scropipe is a monorepo combining audio splitting (previously scrumpler), neural synthesis (previously scronchler), and RAVE integration into a unified package.
 
 ## Installation
 
-Requires Python 3.11+
+Requires Python 3.12+
+
+### Install Options
+
+```bash
+# Splitting only (lightweight, no ML dependencies)
+pip install scropipe
+
+# Full ML synthesis (includes PyTorch, torchaudio, librosa)
+pip install scropipe[ml]
+
+# Development
+pip install scropipe[ml,dev]
+```
 
 ### Linux (with Nix)
 
-The easiest way to get started on Linux is with the Nix flake, which handles all dependencies:
+The Nix flake handles all dependencies including ML:
 
 ```bash
 # Enter development shell (installs everything automatically)
@@ -21,10 +34,10 @@ direnv allow
 ```
 
 The Nix shell provides:
-- Python environment with dependencies
-- scrumpler and scronchler binaries
+- Python 3.12 environment with all dependencies
+- ML dependencies with ROCm GPU support (AMD) or CPU fallback
 - ffmpeg (required by RAVE)
-- RAVE with GPU support (ROCm for AMD, or CPU fallback)
+- RAVE CLI with GPU acceleration
 
 ### Linux (without Nix)
 
@@ -39,8 +52,8 @@ pip install torch torchvision torchaudio --index-url https://download.pytorch.or
 # Or for AMD GPU (ROCm)
 pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/rocm6.2
 
-# Install scropipe
-pip install -e .
+# Install scropipe with ML support
+pip install -e ".[ml]"
 
 # Install RAVE in a separate venv (see RAVE Installation section below)
 ```
@@ -48,7 +61,7 @@ pip install -e .
 ### Windows
 
 ```powershell
-# Install Python 3.11+ from python.org
+# Install Python 3.12+ from python.org
 
 # Install ffmpeg (using chocolatey, or download from https://www.gyan.dev/ffmpeg/builds/)
 choco install ffmpeg
@@ -56,15 +69,15 @@ choco install ffmpeg
 # Install PyTorch with CUDA (for NVIDIA GPU)
 pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
 
-# Install scropipe
-pip install -e .
+# Install scropipe with ML support
+pip install -e ".[ml]"
 
 # Install RAVE in a separate venv (see RAVE Installation section below)
 ```
 
 ### RAVE Installation
 
-RAVE (`acids-rave`) has pinned dependencies (e.g., `scipy==1.10.0`) that conflict with modern Python versions and other packages. Since scropipe calls RAVE via CLI subprocess, install it in a separate virtual environment:
+RAVE (`acids-rave`) has pinned dependencies (e.g., `scipy==1.10.0`) that conflict with modern Python versions. Since scropipe calls RAVE via CLI subprocess, install it in a separate virtual environment:
 
 ```bash
 # Create a separate venv for RAVE
@@ -105,49 +118,16 @@ $env:RAVE_PATH = "$HOME\.rave-venv\Scripts\rave.exe"
 
 Run `scropipe tools` to verify RAVE is detected.
 
-### External Tools
+## Backwards Compatibility
 
-Scropipe requires these external tools for the full pipeline:
-
-- **scrumpler** - Audio splitter (for `split` operations)
-- **scronchler** - VAE-based sample synthesis (for VAE `synthesize` operations)
-
-Both are Python packages that work on any platform. They're automatically available in the Nix development shell, or install manually:
+The `scrumpler` and `scronchler` CLIs are still available as entry points:
 
 ```bash
-# Install from GitHub
-pip install git+https://github.com/erikhoggard/scrumpler.git
-pip install git+https://github.com/erikhoggard/scronchler.git
-
-# Or clone and install locally
-git clone https://github.com/erikhoggard/scrumpler.git
-pip install -e ./scrumpler
-
-git clone https://github.com/erikhoggard/scronchler.git
-pip install -e ./scronchler
-```
-
-**Note:** RAVE synthesis (`--model rave`) uses the `rave` CLI directly and does not require scronchler.
-
-Check tool availability:
-```bash
-scropipe tools
-```
-
-Set custom paths via environment variables:
-
-```bash
-# Linux/macOS
-export SCRUMPLER_PATH=/path/to/scrumpler
-export SCRONCHLER_PATH=/path/to/scronchler
-export RAVE_PATH=/path/to/rave
-```
-
-```powershell
-# Windows (PowerShell)
-$env:SCRUMPLER_PATH = "C:\path\to\scrumpler.exe"
-$env:SCRONCHLER_PATH = "C:\path\to\scronchler.exe"
-$env:RAVE_PATH = "C:\path\to\rave.exe"
+# These still work
+scrumpler input.wav -o ./samples --mode transient
+scrumpler-batch --preset drums
+scronchler preprocess -i ./samples -o ./specs
+scronchler train -i ./specs -o ./model
 ```
 
 ## Usage
@@ -255,11 +235,13 @@ scropipe synthesize ./samples -o ./output --epochs 150 --count 50
 
 ### `tools`
 
-Show status of required external tools.
+Show status of external tools (currently only RAVE).
 
 ```bash
 scropipe tools
 ```
+
+Note: scrumpler and scronchler are now built into scropipe and no longer require external binaries.
 
 ## Presets
 
@@ -310,7 +292,7 @@ count = 10
 
 ## Pipeline Stages
 
-1. **Split** - Chop audio files using Scrumpler (transient detection, grid, or texture gating)
+1. **Split** - Chop audio files (transient detection, grid, or texture gating)
 2. **Collect** - Pool samples from split outputs and included directories
 3. **Preprocess** - Convert samples to mel-spectrograms for training
 4. **Train** - Train a VAE model on the preprocessed data
@@ -372,7 +354,7 @@ scropipe synthesize ./samples --model rave --rave-config v2
 
 | Model | Best For | Training Time | Min Chunk Length |
 |-------|----------|---------------|------------------|
-| `vae` (default) | Drums, percussion, textures | ~30 minutes | 0.5s |
+| `vae` (default) | Drums, percussion, textures | Fast | 0.5s |
 | `rave` | Piano, melodic, harmonic | Several hours | 6s |
 
 RAVE produces much higher quality output for tonal content because it works directly on audio waveforms with a neural vocoder.
@@ -504,6 +486,29 @@ scropipe run -i drums.wav --synthesize --train-vocoder --vocoder-epochs 50
 | 300+ samples | Vocoder likely to outperform Griffin-Lim |
 
 The vocoder helps most with tonal/melodic content. For percussive/noise sounds, Griffin-Lim often works fine.
+
+## Package Structure
+
+```
+scropipe/
+├── scropipe/
+│   ├── __init__.py
+│   ├── cli.py                    # Main CLI
+│   ├── pipeline.py               # Pipeline orchestration
+│   ├── splitter/                 # Audio splitting (built-in)
+│   │   ├── processor.py          # SampleProcessor class
+│   │   └── presets.py            # Batch presets
+│   ├── synth/                    # Neural synthesis (built-in)
+│   │   ├── audio_utils.py        # Audio preprocessing
+│   │   ├── model.py              # VAE model
+│   │   ├── vocoder.py            # HiFi-GAN vocoder
+│   │   └── ...
+│   ├── stages/                   # Pipeline stages
+│   └── utils/
+│       └── discovery.py          # RAVE discovery only
+├── pyproject.toml
+└── flake.nix
+```
 
 ## License
 

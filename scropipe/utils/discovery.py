@@ -1,4 +1,7 @@
-"""Tool discovery utilities for finding external binaries."""
+"""Tool discovery utilities for finding external binaries.
+
+Only RAVE is an external tool now - scrumpler and scronchler are built-in.
+"""
 
 import os
 import shutil
@@ -19,9 +22,8 @@ class ToolNotFoundError(Exception):
 
 
 # Environment variable names for tool paths
+# Only rave is an external tool now
 TOOL_ENV_VARS = {
-    "scrumpler": "SCRUMPLER_PATH",
-    "scronchler": "SCRONCHLER_PATH",
     "rave": "RAVE_PATH",
 }
 
@@ -30,11 +32,11 @@ def find_tool(name: str) -> Path:
     """Find a tool binary by name.
 
     Search order:
-    1. Environment variable (e.g., SCRUMPLER_PATH)
+    1. Environment variable (e.g., RAVE_PATH)
     2. PATH lookup
 
     Args:
-        name: Tool name (e.g., "scrumpler", "scronchler")
+        name: Tool name (e.g., "rave")
 
     Returns:
         Path to the tool binary.
@@ -64,44 +66,29 @@ def find_tool(name: str) -> Path:
     raise ToolNotFoundError(name, env_var)
 
 
-def find_all_tools(include_optional: bool = True) -> dict[str, Optional[Path]]:
-    """Find all known tools and return their paths.
-
-    Args:
-        include_optional: Include optional tools like rave.
+def find_all_tools() -> dict[str, Optional[Path]]:
+    """Find all external tools and return their paths.
 
     Returns:
         Dict mapping tool names to their paths (or None if not found).
     """
-    # Core tools always checked
-    tool_names = ["scrumpler", "scronchler"]
-
-    # Optional tools (rave is only needed for --model rave)
-    if include_optional:
-        tool_names.append("rave")
-
     tools = {}
-    for name in tool_names:
-        try:
-            tools[name] = find_tool(name)
-        except ToolNotFoundError:
-            tools[name] = None
+    # Only rave is an external tool now
+    try:
+        tools["rave"] = find_tool("rave")
+    except ToolNotFoundError:
+        tools["rave"] = None
     return tools
 
 
-def check_tools_available(*tool_names: str) -> list[str]:
-    """Check which tools are available.
-
-    Args:
-        tool_names: Names of tools to check.
+def check_rave_available() -> bool:
+    """Check if RAVE is available.
 
     Returns:
-        List of missing tool names.
+        True if rave can be found.
     """
-    missing = []
-    for name in tool_names:
-        try:
-            find_tool(name)
-        except ToolNotFoundError:
-            missing.append(name)
-    return missing
+    try:
+        find_tool("rave")
+        return True
+    except ToolNotFoundError:
+        return False

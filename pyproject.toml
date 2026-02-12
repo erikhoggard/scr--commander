@@ -4,36 +4,46 @@ build-backend = "hatchling.build"
 
 [project]
 name = "scropipe"
-version = "0.1.0"
-description = "Audio pipeline orchestrator for Scrumpler and Scronchler"
+version = "0.2.0"
+description = "Audio pipeline for splitting, collecting, and synthesizing samples"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 license = "MIT"
 dependencies = [
+    # CLI
     "typer>=0.12.0",
     "rich>=13.7.0",
+    # Splitter (lightweight)
+    "numpy>=1.26.0",
+    "scipy>=1.12.0",
+    "soundfile>=0.12.0",
 ]
 
 [project.optional-dependencies]
+ml = [
+    # Neural synthesis
+    "torch>=2.2.0",
+    "torchaudio>=2.2.0",
+    "librosa>=0.10.0",
+]
 dev = [
     "pytest>=7.0.0",
-    "black>=23.0.0",
     "ruff>=0.1.0",
 ]
 
 [project.scripts]
 scropipe = "scropipe.cli:main"
+# Backwards compatibility
+scrumpler = "scropipe.splitter:main"
+scrumpler-batch = "scropipe.splitter:batch_main"
+scronchler = "scropipe.synth:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["scropipe"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py311"
+target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W"]
-
-[tool.black]
-line-length = 100
-target-version = ["py311"]

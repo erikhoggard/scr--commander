@@ -1,9 +1,7 @@
-"""Train stage - wraps scronchler train command."""
+"""Train stage - trains VAE model using scropipe.synth."""
 
-import subprocess
 from pathlib import Path
 
-from ..utils.discovery import find_tool
 from .base import Stage, StageResult
 
 
@@ -50,40 +48,55 @@ class TrainStage(Stage):
                 message=f"No spectrogram files found in {data_dir}",
             )
 
+        # Import synth modules (requires ML dependencies)
         try:
-            scronchler = find_tool("scronchler")
-        except Exception as e:
-            return StageResult(success=False, message=str(e))
-
-
-        model_path = output_dir / "model.pth"
-
-        # Build command
-        cmd = [
-            str(scronchler),
-            "train",
-            "-d", str(data_dir),
-            "-m", str(model_path),
-            "--epochs", str(epochs),
-            "--batch-size", str(batch_size),
-            "--lr", str(learning_rate),
-            "--z-dim", str(z_dim),
-            "--kl-weight", str(kl_weight),
-        ]
-
-        try:
-            # Training can take a while, don't capture output so user sees progress
-            result = subprocess.run(
-                cmd,
-                check=False,
+            import torch
+            from ..synth.data_loader import create_dataloader
+            from ..synth.model import VAE
+            from ..synth.train_utils import Trainer
+        except ImportError as e:
+            return StageResult(
+                success=False,
+                message=f"ML dependencies not installed. Run: pip install scropipe[ml]\nError: {e}",
             )
 
-            if result.returncode != 0:
-                self.log_error("scronchler train failed")
-                return StageResult(
-                    success=False,
-                    message=f"scronchler exited with code {result.returncode}",
-                )
+        output_dir = self.ensure_output_dir()
+        model_path = output_dir / "model.pth"
+
+        try:
+            # Create dataloader
+            dataloader, dataset = create_dataloader(
+                data_dir,
+                batch_size=batch_size,
+                shuffle=True,
+                normalize=True,
+            )
+
+            # Get input shape from dataset
+            input_shape = dataset.spec_shape
+            self.log(f"[dim]Spectrogram shape: {input_shape}[/dim]")
+            self.log(f"[dim]Latent dimension: {z_dim}[/dim]")
+            self.log(f"[dim]Dataset size: {len(dataset)} samples[/dim]")
+
+            # Create model
+            model = VAE(input_shape=input_shape, z_dim=z_dim)
+
+            # Count parameters
+            num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+            self.log(f"[dim]Model parameters: {num_params:,}[/dim]")
+
+            # Create trainer and train
+            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            trainer = Trainer(
+                model=model,
+                dataloader=dataloader,
+                dataset=dataset,
+                lr=learning_rate,
+                kl_weight=kl_weight,
+                device=device,
+            )
+
+            trainer.train(epochs=epochs, save_path=model_path)
 
             if not model_path.exists():
                 return StageResult(
@@ -105,11 +118,6 @@ class TrainStage(Stage):
                 },
             )
 
-        except subprocess.CalledProcessError as e:
-            return StageResult(
-                success=False,
-                message=f"Command failed: {e}",
-            )
         except Exception as e:
             return StageResult(
                 success=False,

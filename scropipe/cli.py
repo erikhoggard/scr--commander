@@ -13,11 +13,11 @@ from .stages import (
     CollectStage, GenerateStage, PreprocessStage, SplitStage, TrainStage, TrainVocoderStage,
     RavePreprocessStage, RaveTrainStage, RaveExportStage, RaveGenerateStage,
 )
-from .utils.discovery import check_tools_available, find_all_tools
+from .utils.discovery import find_all_tools
 
 app = typer.Typer(
     name="scropipe",
-    help="Audio pipeline orchestrator for Scrumpler and Scronchler",
+    help="Audio pipeline for splitting, collecting, and synthesizing samples",
     add_completion=False,
 )
 console = Console()
@@ -212,25 +212,6 @@ def run(
     final_epochs = config.get("train", {}).get("epochs", epochs)
     final_count = config.get("generate", {}).get("count", count)
 
-    # Check required tools
-    required = []
-    if input_files:
-        required.append("scrumpler")
-    if final_synthesize:
-        required.append("scronchler")
-
-    if required:
-        missing = check_tools_available(*required)
-        if missing:
-            console.print("[red]Missing required tools:[/red]")
-            for tool in missing:
-                console.print(f"  - {tool}")
-            console.print()
-            console.print("[dim]Install them or set environment variables:[/dim]")
-            console.print("  SCRUMPLER_PATH=/path/to/scrumpler")
-            console.print("  SCRONCHLER_PATH=/path/to/scronchler")
-            raise typer.Exit(1)
-
     # Build split kwargs
     split_kwargs = {
         "delta": delta,
@@ -290,16 +271,11 @@ def split(
     bpm: Optional[float] = typer.Option(None, "--bpm"),
     bars: int = typer.Option(4, "--bars"),
 ):
-    """Split audio file into samples using scrumpler.
+    """Split audio file into samples.
 
     Example:
         scropipe split ~/audio/drums.wav --mode transient -o ./samples
     """
-    missing = check_tools_available("scrumpler")
-    if missing:
-        console.print("[red]scrumpler not found[/red]")
-        raise typer.Exit(1)
-
     output_base = output or Path.cwd() / "scropipe-split"
     stage = SplitStage(output_base)
 
@@ -421,11 +397,6 @@ def synthesize(
     Example:
         scropipe synthesize ./samples --output ./ai-samples --count 50
     """
-    missing = check_tools_available("scronchler")
-    if missing:
-        console.print("[red]scronchler not found[/red]")
-        raise typer.Exit(1)
-
     output_base = output or Path.cwd() / "scropipe-synth"
     output_base.mkdir(parents=True, exist_ok=True)
 
@@ -561,24 +532,33 @@ def synthesize(
 
 @app.command()
 def tools():
-    """Show status of required tools."""
+    """Show status of external tools.
+
+    Note: scrumpler and scronchler are now built-in to scropipe.
+    Only RAVE is an external tool (for --model rave).
+    """
     tools_status = find_all_tools()
 
-    console.print("[bold]Tool Status[/bold]")
+    console.print("[bold]External Tool Status[/bold]")
     console.print()
 
+    # Built-in tools
+    console.print("  [green]✓[/green] splitter: [dim]built-in[/dim]")
+    console.print("  [green]✓[/green] synth (VAE): [dim]built-in[/dim]")
+
+    # External tools
     for name, path in tools_status.items():
-        optional = " [dim](optional)[/dim]" if name == "rave" else ""
         if path:
-            console.print(f"  [green]✓[/green] {name}: {path}{optional}")
+            console.print(f"  [green]✓[/green] {name}: {path} [dim](optional)[/dim]")
         else:
-            console.print(f"  [red]✗[/red] {name}: not found{optional}")
+            console.print(f"  [yellow]○[/yellow] {name}: not found [dim](only needed for --model rave)[/dim]")
 
     console.print()
-    console.print("[dim]Set environment variables to override paths:[/dim]")
-    console.print("  SCRUMPLER_PATH=/path/to/scrumpler")
-    console.print("  SCRONCHLER_PATH=/path/to/scronchler")
-    console.print("  RAVE_PATH=/path/to/rave  (only needed for --model rave)")
+    console.print("[bold]Install Options[/bold]")
+    console.print("  pip install scropipe       - splitting only (lightweight)")
+    console.print("  pip install scropipe[ml]   - full ML synthesis")
+    console.print()
+    console.print("[dim]Set RAVE_PATH to override rave location (only needed for --model rave)[/dim]")
 
 
 def main():

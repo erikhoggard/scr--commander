@@ -1,21 +1,27 @@
-"""Split stage - wraps scrumpler for audio splitting."""
+"""Split stage - uses scropipe.splitter for audio splitting."""
 
-import subprocess
 from pathlib import Path
 from typing import Literal, Optional
 
-from ..utils.discovery import find_tool
 from .base import Stage, StageResult
 
 
 SplitMode = Literal["grid", "transient", "texture"]
 
 
+class _Args:
+    """Simple namespace to hold arguments for SampleProcessor."""
+
+    def __init__(self, **kwargs):
+        for key, value in kwargs.items():
+            setattr(self, key, value)
+
+
 class SplitStage(Stage):
-    """Stage that splits audio files using scrumpler."""
+    """Stage that splits audio files using the built-in splitter."""
 
     name = "splits"
-    description = "Split audio into samples using scrumpler"
+    description = "Split audio into samples"
 
     def get_split_output_dir(self, source_name: str) -> Path:
         """Get output directory for a specific source.
@@ -85,62 +91,52 @@ class SplitStage(Stage):
         # Sanitize the name
         source_name = source_name.replace(" ", "_").replace(".", "_")
 
+        # Import the splitter module
         try:
-            scrumpler = find_tool("scrumpler")
-        except Exception as e:
-            return StageResult(success=False, message=str(e))
+            from ..splitter import SampleProcessor
+        except ImportError as e:
+            return StageResult(
+                success=False,
+                message=f"Failed to import splitter: {e}",
+            )
 
         # Create output directory for this specific source
         self.ensure_output_dir()  # Ensure base "splits" directory exists
         source_output_dir = self.get_split_output_dir(source_name)
         source_output_dir.mkdir(parents=True, exist_ok=True)
 
-        # Build command
-        cmd = [
-            str(scrumpler),
-            str(input_file),
-            "-o", str(source_output_dir),
-            f"--{mode}",
-            "--channel", channel,
-            "--sr", str(sample_rate),
-        ]
+        # Calculate chunk_length from BPM if specified
+        final_chunk_length = chunk_length
+        if bpm:
+            final_chunk_length = (60.0 / bpm) * bars * 4
+        elif final_chunk_length is None:
+            final_chunk_length = 2.0
 
-        # Add mode-specific options
-        if mode == "grid":
-            if bpm:
-                cmd.extend(["--bpm", str(bpm), "--bars", str(bars)])
-            elif chunk_length:
-                cmd.extend(["--chunk-length", str(chunk_length)])
-            else:
-                cmd.extend(["--chunk-length", "2.0"])
-
-        elif mode == "transient":
-            cmd.extend([
-                "--delta", str(delta),
-                "--min-length", str(min_length),
-                "--max-length", str(max_length),
-            ])
-
-        elif mode == "texture":
-            cmd.extend([
-                "--min-duration", str(min_duration),
-                "--max-duration", str(max_duration),
-                "--rms-threshold", str(rms_threshold),
-                "--stability-threshold", str(stability_threshold),
-            ])
+        # Build args object
+        args = _Args(
+            channel=channel,
+            chunk_length=final_chunk_length,
+            bpm=bpm,
+            bars=bars,
+            delta=delta,
+            min_length=min_length,
+            max_length=max_length,
+            min_duration=min_duration,
+            max_duration=max_duration,
+            rms_threshold=rms_threshold,
+            stability_threshold=stability_threshold,
+        )
 
         try:
-            result = self.run_command(cmd, check=False)
+            # Create processor and run
+            processor = SampleProcessor(
+                input_dir=None,
+                output_dir=source_output_dir,
+                sr=sample_rate
+            )
+            processor.process_single_file(input_file, modes=[mode], args=args)
 
-            if result.returncode != 0:
-                self.log_error(f"scrumpler failed: {result.stderr}")
-                return StageResult(
-                    success=False,
-                    message=f"scrumpler exited with code {result.returncode}",
-                    details={"stderr": result.stderr, "stdout": result.stdout},
-                )
-
-            # Find output files - scrumpler creates subdirectories
+            # Find output files - splitter creates subdirectories
             wav_files = list(source_output_dir.rglob("*.wav"))
 
             if not wav_files:
@@ -164,12 +160,6 @@ class SplitStage(Stage):
                 },
             )
 
-        except subprocess.CalledProcessError as e:
-            return StageResult(
-                success=False,
-                message=f"Command failed: {e}",
-                details={"stderr": e.stderr if e.stderr else ""},
-            )
         except Exception as e:
             return StageResult(
                 success=False,

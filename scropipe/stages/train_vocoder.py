@@ -1,9 +1,7 @@
-"""Train vocoder stage - wraps scronchler train-vocoder command."""
+"""Train vocoder stage - trains HiFi-GAN using scropipe.synth."""
 
-import subprocess
 from pathlib import Path
 
-from ..utils.discovery import find_tool
 from .base import Stage, StageResult
 
 
@@ -48,35 +46,63 @@ class TrainVocoderStage(Stage):
                 message=f"Spectrogram directory not found: {spec_dir}",
             )
 
+        # Import synth modules (requires ML dependencies)
         try:
-            scronchler = find_tool("scronchler")
-        except Exception as e:
-            return StageResult(success=False, message=str(e))
+            import torch
+            from ..synth import audio_utils
+            from ..synth.data_loader import AudioSpectrogramDataset
+            from ..synth.vocoder import HiFiGANGenerator, MultiPeriodDiscriminator, MultiScaleDiscriminator
+            from ..synth.vocoder_train import VocoderTrainer
+        except ImportError as e:
+            return StageResult(
+                success=False,
+                message=f"ML dependencies not installed. Run: pip install scropipe[ml]\nError: {e}",
+            )
 
         output_dir = self.ensure_output_dir()
         vocoder_path = output_dir / "vocoder.pth"
 
-        # Build command
-        cmd = [
-            str(scronchler),
-            "train-vocoder",
-            "-a", str(audio_dir),
-            "-s", str(spec_dir),
-            "-o", str(vocoder_path),
-            "--epochs", str(epochs),
-            "--batch-size", str(batch_size),
-            "--lr", str(learning_rate),
-        ]
-
         try:
-            result = subprocess.run(cmd, check=False)
+            # Create dataset
+            dataset = AudioSpectrogramDataset(audio_dir, spec_dir)
+            self.log(f"[dim]Found {len(dataset)} audio/spectrogram pairs[/dim]")
 
-            if result.returncode != 0:
-                self.log_error("scronchler train-vocoder failed")
-                return StageResult(
-                    success=False,
-                    message=f"scronchler exited with code {result.returncode}",
-                )
+            # Create dataloader
+            effective_batch_size = min(batch_size, len(dataset))
+            dataloader = torch.utils.data.DataLoader(
+                dataset,
+                batch_size=effective_batch_size,
+                shuffle=True,
+                num_workers=0,
+                pin_memory=torch.cuda.is_available(),
+            )
+
+            # Create models
+            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            generator = HiFiGANGenerator(n_mels=audio_utils.N_MELS)
+            mpd = MultiPeriodDiscriminator()
+            msd = MultiScaleDiscriminator()
+
+            # Count parameters
+            g_params = sum(p.numel() for p in generator.parameters() if p.requires_grad)
+            d_params = sum(p.numel() for p in mpd.parameters() if p.requires_grad)
+            d_params += sum(p.numel() for p in msd.parameters() if p.requires_grad)
+            self.log(f"[dim]Generator parameters: {g_params:,}[/dim]")
+            self.log(f"[dim]Discriminator parameters: {d_params:,}[/dim]")
+
+            # Create trainer and train
+            trainer = VocoderTrainer(
+                generator=generator,
+                mpd=mpd,
+                msd=msd,
+                dataloader=dataloader,
+                dataset=dataset,
+                lr_g=learning_rate,
+                lr_d=learning_rate,
+                device=device,
+            )
+
+            trainer.train(epochs=epochs, save_path=vocoder_path)
 
             if not vocoder_path.exists():
                 return StageResult(
@@ -97,10 +123,10 @@ class TrainVocoderStage(Stage):
                 },
             )
 
-        except subprocess.CalledProcessError as e:
+        except ValueError as e:
             return StageResult(
                 success=False,
-                message=f"Command failed: {e}",
+                message=f"Dataset error: {e}",
             )
         except Exception as e:
             return StageResult(
