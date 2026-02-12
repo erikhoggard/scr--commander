@@ -6,7 +6,7 @@ Scropipe chains together external tools ([Scrumpler](https://github.com/erikhogg
 
 ## Installation
 
-Requires Python 3.10+
+Requires Python 3.11+
 
 ### Linux (with Nix)
 
@@ -39,17 +39,16 @@ pip install torch torchvision torchaudio --index-url https://download.pytorch.or
 # Or for AMD GPU (ROCm)
 pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/rocm6.2
 
-# Install RAVE
-pip install acids-rave
-
 # Install scropipe
 pip install -e .
+
+# Install RAVE in a separate venv (see RAVE Installation section below)
 ```
 
 ### Windows
 
 ```powershell
-# Install Python 3.10+ from python.org
+# Install Python 3.11+ from python.org
 
 # Install ffmpeg (using chocolatey, or download from https://www.gyan.dev/ffmpeg/builds/)
 choco install ffmpeg
@@ -57,12 +56,42 @@ choco install ffmpeg
 # Install PyTorch with CUDA (for NVIDIA GPU)
 pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
 
-# Install RAVE
-pip install acids-rave
-
 # Install scropipe
 pip install -e .
+
+# Install RAVE in a separate venv (see RAVE Installation section below)
 ```
+
+### RAVE Installation
+
+RAVE (`acids-rave`) has pinned dependencies (e.g., `scipy==1.10.0`) that conflict with modern Python versions and other packages. Since scropipe calls RAVE via CLI subprocess, install it in a separate virtual environment:
+
+```bash
+# Create a separate venv for RAVE
+python -m venv ~/.rave-venv
+
+# Install RAVE with its specific dependencies
+~/.rave-venv/bin/pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+~/.rave-venv/bin/pip install acids-rave
+
+# Add RAVE to your PATH (add to .bashrc/.zshrc for persistence)
+export PATH="$HOME/.rave-venv/bin:$PATH"
+```
+
+On Windows (PowerShell):
+```powershell
+# Create a separate venv for RAVE
+python -m venv $HOME\.rave-venv
+
+# Install RAVE
+& $HOME\.rave-venv\Scripts\pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+& $HOME\.rave-venv\Scripts\pip install acids-rave
+
+# Add to PATH for current session
+$env:PATH = "$HOME\.rave-venv\Scripts;$env:PATH"
+```
+
+Scropipe will find the `rave` command as long as it's in your PATH.
 
 ### External Tools
 

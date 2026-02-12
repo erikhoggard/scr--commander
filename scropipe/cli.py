@@ -31,11 +31,7 @@ def version_callback(value: bool):
 
 def load_preset(preset_name: str) -> dict:
     """Load preset configuration from TOML file."""
-    # Try to import tomllib (Python 3.11+) or tomli
-    try:
-        import tomllib
-    except ImportError:
-        import tomli as tomllib
+    import tomllib
 
     # Look for preset in standard locations
     preset_paths = [

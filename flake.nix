@@ -30,7 +30,6 @@
         pythonEnv = pkgs.python311.withPackages (ps: with ps; [
           typer
           rich
-          tomli
           # Dev dependencies
           pytest
           black
@@ -62,7 +61,6 @@
           propagatedBuildInputs = with pkgs.python311Packages; [
             typer
             rich
-            tomli
           ];
 
           # Wrap with tool binaries in PATH
