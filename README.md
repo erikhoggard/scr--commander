@@ -60,8 +60,10 @@ pip install -e ".[ml]"
 
 ### Windows
 
+**Important:** PyTorch does not ship wheels for Python 3.13+. You **must** use Python 3.12. If you also have a newer Python installed, Windows may resolve `python` to the wrong version — see Troubleshooting below.
+
 ```powershell
-# Install Python 3.12+ from python.org
+# Install Python 3.12 from python.org (NOT 3.13+)
 
 # Install ffmpeg (using chocolatey, or download from https://www.gyan.dev/ffmpeg/builds/)
 choco install ffmpeg
@@ -77,32 +79,62 @@ pip install -e ".[ml]"
 
 ### RAVE Installation
 
-RAVE (`acids-rave`) has pinned dependencies (e.g., `scipy==1.10.0`) that conflict with modern Python versions. Since scropipe calls RAVE via CLI subprocess, install it in a separate virtual environment:
+RAVE (`acids-rave`) has broken/pinned dependencies that conflict with modern Python packages. Since scropipe calls RAVE via CLI subprocess, install it in a **separate virtual environment** and then patch the incompatibilities.
+
+#### Linux/macOS
 
 ```bash
 # Create a separate venv for RAVE
 python -m venv ~/.rave-venv
 
-# Install RAVE with its specific dependencies
+# Install PyTorch first, then RAVE
 ~/.rave-venv/bin/pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
 ~/.rave-venv/bin/pip install acids-rave
+
+# Force-reinstall torch to fix version mismatches from RAVE's deps
+~/.rave-venv/bin/pip install --force-reinstall torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+
+# Pin scipy to a version that still has scipy.signal.kaiser
+~/.rave-venv/bin/pip install "scipy==1.11.4"
 
 # Add RAVE to your PATH (add to .bashrc/.zshrc for persistence)
 export PATH="$HOME/.rave-venv/bin:$PATH"
 ```
 
-On Windows (PowerShell):
+#### Windows (PowerShell)
+
 ```powershell
-# Create a separate venv for RAVE
+# Create a separate venv for RAVE (MUST be Python 3.12)
 python -m venv $HOME\.rave-venv
 
-# Install RAVE
+# Install PyTorch first, then RAVE
 & $HOME\.rave-venv\Scripts\pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
 & $HOME\.rave-venv\Scripts\pip install acids-rave
 
-# Add to PATH for current session
-$env:PATH = "$HOME\.rave-venv\Scripts;$env:PATH"
+# Force-reinstall torch to fix version mismatches from RAVE's deps
+& $HOME\.rave-venv\Scripts\pip install --force-reinstall torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+
+# Pin scipy to a version that still has scipy.signal.kaiser
+& $HOME\.rave-venv\Scripts\pip install "scipy==1.11.4"
 ```
+
+#### Patch RAVE's numpy incompatibility
+
+RAVE's code uses `np.float`, which was removed in numpy 1.24. You need to patch one file in the RAVE venv:
+
+**Linux/macOS:**
+```bash
+sed -i 's/np\.float)/np.float64)/g' ~/.rave-venv/lib/python3.12/site-packages/rave/dataset.py
+```
+
+**Windows (PowerShell):**
+```powershell
+(Get-Content $HOME\.rave-venv\Lib\site-packages\rave\dataset.py) -replace 'np\.float\)', 'np.float64)' | Set-Content $HOME\.rave-venv\Lib\site-packages\rave\dataset.py
+```
+
+Or manually edit `~/.rave-venv/.../rave/dataset.py` line 64 and change `np.float` to `np.float64`.
+
+#### Tell scropipe where RAVE is
 
 Scropipe will find the `rave` command if it's in your PATH, or you can set `RAVE_PATH`:
 
@@ -112,11 +144,23 @@ export RAVE_PATH="$HOME/.rave-venv/bin/rave"
 ```
 
 ```powershell
-# Windows
+# Windows (current session)
 $env:RAVE_PATH = "$HOME\.rave-venv\Scripts\rave.exe"
+
+# Windows (permanent)
+[Environment]::SetEnvironmentVariable("RAVE_PATH", "$HOME\.rave-venv\Scripts\rave.exe", "User")
 ```
 
-Run `scropipe tools` to verify RAVE is detected.
+#### Verify
+
+```bash
+scropipe tools    # Should show rave as detected
+rave train --help # Should print flags without errors
+```
+
+#### Why all this?
+
+RAVE was built against older versions of numpy, scipy, and PyTorch. Installing it with `pip install acids-rave` pulls in dependency versions that conflict with each other and with modern Python. The separate venv + force-reinstall + patch approach is the least painful way to get it working. Blame Python packaging, not yourself.
 
 ## Backwards Compatibility
 
@@ -411,7 +455,6 @@ ls scropipe-output/03-rave-model/model_*/version_*/checkpoints/*.ckpt
 # Linux - use the full path to the checkpoint file
 rave train --config v2 \
     --db_path scropipe-output/02-rave-data \
-    --out_path scropipe-output/03-rave-model \
     --name model \
     --ckpt scropipe-output/03-rave-model/model_XXXX/version_0/checkpoints/epoch-epoch=0100.ckpt \
     --gpu 0 --workers 0
@@ -424,7 +467,6 @@ Get-ChildItem -Recurse scropipe-output/03-rave-model -Filter "*.ckpt"
 # Resume with full path to checkpoint file
 rave train --config v2 `
     --db_path scropipe-output/02-rave-data `
-    --out_path scropipe-output/03-rave-model `
     --name model `
     --ckpt scropipe-output/03-rave-model/model_XXXX/version_0/checkpoints/epoch-epoch=0100.ckpt `
     --gpu 0
@@ -447,18 +489,15 @@ ls scropipe-output/03-rave-model/model/**/checkpoints/*.ts
 
 #### Windows / NVIDIA GPU Notes
 
-RAVE works well on Windows with NVIDIA GPUs:
+RAVE works on Windows with NVIDIA GPUs, but getting there requires patience:
 
-- Install CUDA toolkit from NVIDIA (or let PyTorch handle it)
+- **Python 3.12 only** — PyTorch has no wheels for 3.13+ on Windows
 - Use `--chunk-length 6` or longer (RAVE's preprocessing has a bug with short audio)
 - Training should work with default `--workers 8` (reduce if you hit memory issues)
-- Use PowerShell or Command Prompt; paths work with forward slashes
+- You will see warnings about Tensor Cores and `weight_norm` deprecation — these are harmless
 
 ```powershell
 # Example on Windows
-scropipe run -i C:/audio/piano.wav --synthesize --model rave --chunk-length 6
-
-# Or use relative paths
 scropipe run -i .\audio\piano.wav --synthesize --model rave --chunk-length 6
 ```
 
@@ -509,6 +548,7 @@ scropipe/
 ├── pyproject.toml
 └── flake.nix
 ```
+
 
 ## License
 

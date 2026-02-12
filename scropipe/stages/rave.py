@@ -164,11 +164,12 @@ class RaveTrainStage(Stage):
             gpu = _detect_gpu()
 
         # Call rave CLI directly to ensure correct n_signal
+        # Note: rave train has no --out_path flag; it writes to cwd,
+        # so we run it from output_dir.
         cmd = [
             rave_cmd, "train",
             "--config", config,
             "--db_path", str(data_dir),
-            "--out_path", str(output_dir),
             "--name", name,
             "--n_signal", str(n_signal),
         ]
@@ -184,10 +185,10 @@ class RaveTrainStage(Stage):
         cmd.extend(["--val_every", str(val_every)])
 
         if epochs is not None:
-            cmd.extend(["--max_epochs", str(epochs)])
+            cmd.extend(["--max_steps", str(epochs)])
 
         try:
-            result = subprocess.run(cmd, check=False)
+            result = subprocess.run(cmd, check=False, cwd=str(output_dir))
 
             if result.returncode != 0:
                 self.log_error("RAVE training failed")
