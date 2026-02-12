@@ -22,6 +22,7 @@ class ToolNotFoundError(Exception):
 TOOL_ENV_VARS = {
     "scrumpler": "SCRUMPLER_PATH",
     "scronchler": "SCRONCHLER_PATH",
+    "rave": "RAVE_PATH",
 }
 
 
@@ -63,14 +64,24 @@ def find_tool(name: str) -> Path:
     raise ToolNotFoundError(name, env_var)
 
 
-def find_all_tools() -> dict[str, Optional[Path]]:
+def find_all_tools(include_optional: bool = True) -> dict[str, Optional[Path]]:
     """Find all known tools and return their paths.
+
+    Args:
+        include_optional: Include optional tools like rave.
 
     Returns:
         Dict mapping tool names to their paths (or None if not found).
     """
+    # Core tools always checked
+    tool_names = ["scrumpler", "scronchler"]
+
+    # Optional tools (rave is only needed for --model rave)
+    if include_optional:
+        tool_names.append("rave")
+
     tools = {}
-    for name in TOOL_ENV_VARS:
+    for name in tool_names:
         try:
             tools[name] = find_tool(name)
         except ToolNotFoundError:

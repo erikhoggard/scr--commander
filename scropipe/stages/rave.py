@@ -1,11 +1,23 @@
-"""RAVE stages - wraps scronchler RAVE commands for high-quality audio synthesis."""
+"""RAVE stages - wraps RAVE commands for high-quality audio synthesis."""
 
 import subprocess
 from pathlib import Path
 from typing import Optional
 
-from ..utils.discovery import find_tool
+from ..utils.discovery import ToolNotFoundError, find_tool
 from .base import Stage, StageResult
+
+
+def _find_rave() -> str:
+    """Find the rave executable.
+
+    Returns:
+        Path to the rave command.
+
+    Raises:
+        ToolNotFoundError: If rave cannot be found.
+    """
+    return str(find_tool("rave"))
 
 
 class RavePreprocessStage(Stage):
@@ -39,10 +51,20 @@ class RavePreprocessStage(Stage):
 
         output_dir = self.ensure_output_dir()
 
+        # Find rave executable
+        try:
+            rave_cmd = _find_rave()
+        except ToolNotFoundError:
+            return StageResult(
+                success=False,
+                message="RAVE not found. Set RAVE_PATH or add rave to PATH. "
+                        "See README for installation instructions.",
+            )
+
         # Call rave CLI directly
         # Note: --channels removed as it's not supported by all RAVE versions
         cmd = [
-            "rave", "preprocess",
+            rave_cmd, "preprocess",
             "--input_path", str(input_dir),
             "--output_path", str(output_dir),
             "--num_signal", str(num_signal),
@@ -55,7 +77,7 @@ class RavePreprocessStage(Stage):
                 self.log_error("RAVE preprocess failed")
                 return StageResult(
                     success=False,
-                    message=f"scronchler exited with code {result.returncode}",
+                    message=f"rave preprocess exited with code {result.returncode}",
                 )
 
             self.log_success(f"RAVE dataset created at {output_dir}")
@@ -127,13 +149,23 @@ class RaveTrainStage(Stage):
 
         output_dir = self.ensure_output_dir()
 
+        # Find rave executable
+        try:
+            rave_cmd = _find_rave()
+        except ToolNotFoundError:
+            return StageResult(
+                success=False,
+                message="RAVE not found. Set RAVE_PATH or add rave to PATH. "
+                        "See README for installation instructions.",
+            )
+
         # Auto-detect GPU if not specified (handles AMD ROCm)
         if gpu is None:
             gpu = _detect_gpu()
 
         # Call rave CLI directly to ensure correct n_signal
         cmd = [
-            "rave", "train",
+            rave_cmd, "train",
             "--config", config,
             "--db_path", str(data_dir),
             "--out_path", str(output_dir),
@@ -161,7 +193,7 @@ class RaveTrainStage(Stage):
                 self.log_error("RAVE training failed")
                 return StageResult(
                     success=False,
-                    message=f"scronchler exited with code {result.returncode}",
+                    message=f"rave train exited with code {result.returncode}",
                 )
 
             self.log_success(f"RAVE model trained at {output_dir}")
@@ -207,8 +239,18 @@ class RaveExportStage(Stage):
                 message=f"Run directory not found: {run_dir}",
             )
 
+        # Find rave executable
+        try:
+            rave_cmd = _find_rave()
+        except ToolNotFoundError:
+            return StageResult(
+                success=False,
+                message="RAVE not found. Set RAVE_PATH or add rave to PATH. "
+                        "See README for installation instructions.",
+            )
+
         # Use rave CLI directly
-        cmd = ["rave", "export", "--run", str(run_dir)]
+        cmd = [rave_cmd, "export", "--run", str(run_dir)]
 
         if streaming:
             cmd.append("--streaming")

@@ -91,7 +91,19 @@ python -m venv $HOME\.rave-venv
 $env:PATH = "$HOME\.rave-venv\Scripts;$env:PATH"
 ```
 
-Scropipe will find the `rave` command as long as it's in your PATH.
+Scropipe will find the `rave` command if it's in your PATH, or you can set `RAVE_PATH`:
+
+```bash
+# Linux/macOS
+export RAVE_PATH="$HOME/.rave-venv/bin/rave"
+```
+
+```powershell
+# Windows
+$env:RAVE_PATH = "$HOME\.rave-venv\Scripts\rave.exe"
+```
+
+Run `scropipe tools` to verify RAVE is detected.
 
 ### External Tools
 
@@ -128,12 +140,14 @@ Set custom paths via environment variables:
 # Linux/macOS
 export SCRUMPLER_PATH=/path/to/scrumpler
 export SCRONCHLER_PATH=/path/to/scronchler
+export RAVE_PATH=/path/to/rave
 ```
 
 ```powershell
 # Windows (PowerShell)
 $env:SCRUMPLER_PATH = "C:\path\to\scrumpler.exe"
 $env:SCRONCHLER_PATH = "C:\path\to\scronchler.exe"
+$env:RAVE_PATH = "C:\path\to\rave.exe"
 ```
 
 ## Usage

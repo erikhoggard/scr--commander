@@ -568,15 +568,17 @@ def tools():
     console.print()
 
     for name, path in tools_status.items():
+        optional = " [dim](optional)[/dim]" if name == "rave" else ""
         if path:
-            console.print(f"  [green][/green] {name}: {path}")
+            console.print(f"  [green]✓[/green] {name}: {path}{optional}")
         else:
-            console.print(f"  [red][/red] {name}: not found")
+            console.print(f"  [red]✗[/red] {name}: not found{optional}")
 
     console.print()
     console.print("[dim]Set environment variables to override paths:[/dim]")
     console.print("  SCRUMPLER_PATH=/path/to/scrumpler")
     console.print("  SCRONCHLER_PATH=/path/to/scronchler")
+    console.print("  RAVE_PATH=/path/to/rave  (only needed for --model rave)")
 
 
 def main():
