@@ -69,6 +69,7 @@ class TrainConfigPanel(Static):
 
             with Horizontal(classes="action-bar"):
                 yield Button("Start Training", variant="primary", id="start-training-btn")
+                yield Button("Resume Training", variant="default", id="resume-training-btn")
 
     def on_mount(self) -> None:
         """Populate pool list and detect GPU on mount."""
@@ -226,8 +227,29 @@ class TrainTab(Static):
         """Handle button presses for training controls."""
         if event.button.id == "start-training-btn":
             self._start_training()
+        elif event.button.id == "resume-training-btn":
+            self._resume_training()
         elif event.button.id == "stop-training-btn":
             self._stop_training()
+
+    def _resume_training(self) -> None:
+        """Show resumable runs and resume selected one."""
+        from ..training_state import list_paused_runs
+
+        models_dir = getattr(self.app, "models_dir", None)
+        if models_dir is None:
+            self._update_status("Error: Models directory not configured.")
+            return
+
+        paused = list_paused_runs(models_dir)
+        if not paused:
+            self._update_status("No paused training runs found.")
+            return
+
+        # For now, resume the most recent paused run
+        run = paused[-1]
+        self._update_status(f"Resuming {run.model_name}...")
+        # Full resume flow will be implemented in Task 7
 
     def _start_training(self) -> None:
         """Validate inputs and start the training process."""

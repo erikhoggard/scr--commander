@@ -1,4 +1,5 @@
 import pytest
+
 from scropipe.tui.app import ScropipeApp
 
 
@@ -115,6 +116,16 @@ async def test_train_tab_dashboard_has_controls(app):
         assert app.query_one("#dash-timing") is not None
         assert app.query_one("#dash-checkpoint") is not None
         assert app.query_one("#stop-training-btn") is not None
+
+
+@pytest.mark.asyncio
+async def test_train_tab_has_resume_button(app):
+    async with app.run_test() as pilot:
+        tabbed = app.query_one("TabbedContent")
+        tabbed.active = "tab-train"
+        await pilot.pause()
+        btn = app.query_one("#resume-training-btn")
+        assert btn is not None
 
 
 @pytest.mark.asyncio
