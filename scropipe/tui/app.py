@@ -11,6 +11,7 @@ from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Button, Header, Input, Label, Static, TabbedContent, TabPane
 
+from .pool_tab import PoolTab
 from .split_tab import SplitTab
 
 
@@ -110,7 +111,7 @@ class ScropipeApp(App):
             with TabPane("Split", id="tab-split"):
                 yield SplitTab()
             with TabPane("Pool", id="tab-pool"):
-                yield Label("Pool tab content", classes="tab-content")
+                yield PoolTab()
             with TabPane("Train", id="tab-train"):
                 yield Label("Train tab content", classes="tab-content")
             with TabPane("Generate", id="tab-generate"):
