@@ -116,7 +116,6 @@ def main_callback(
     ),
 ):
     """Scropipe - Audio pipeline orchestrator."""
-    pass
 
 
 @app.command()
@@ -1386,19 +1385,30 @@ def models(
         console.print("[dim]Use --info <name> for details[/dim]")
 
 
+def _launch_tui():
+    """Launch the Textual TUI."""
+    from .tui.app import ScropipeApp
+    from .config import load_config
+    config = load_config()
+    tui = ScropipeApp(
+        models_dir=config.models_dir,
+        pools_dir=config.pools_dir,
+    )
+    tui.run()
+
+
 def main():
-    """Entry point for the CLI."""
+    """Entry point for the CLI.
+
+    With no arguments, launches the TUI.
+    With a subcommand, runs the CLI.
+    """
     import sys
-    # If no subcommand given, launch TUI
-    if len(sys.argv) == 1:
-        from .tui.app import ScropipeApp
-        from .config import load_config
-        config = load_config()
-        tui = ScropipeApp(
-            models_dir=config.models_dir,
-            pools_dir=config.pools_dir,
-        )
-        tui.run()
+    # Check if user passed any arguments (beyond just the program name)
+    # Options like --version/-V are handled by Typer, so only check for bare invocation
+    args = sys.argv[1:]
+    if not args:
+        _launch_tui()
     else:
         app()
 
