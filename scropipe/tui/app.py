@@ -11,6 +11,8 @@ from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Button, Header, Input, Label, Static, TabbedContent, TabPane
 
+from .split_tab import SplitTab
+
 
 class SetupModal(ModalScreen[tuple[Path, Path]]):
     """First-run setup modal for configuring directory paths."""
@@ -106,7 +108,7 @@ class ScropipeApp(App):
         yield Header()
         with TabbedContent():
             with TabPane("Split", id="tab-split"):
-                yield Label("Split tab content", classes="tab-content")
+                yield SplitTab()
             with TabPane("Pool", id="tab-pool"):
                 yield Label("Pool tab content", classes="tab-content")
             with TabPane("Train", id="tab-train"):
