@@ -1,5 +1,9 @@
-import json
-from scropipe.training_state import TrainingRunInfo, save_training_run, load_training_run, list_paused_runs
+from scropipe.training_state import (
+    TrainingRunInfo,
+    list_paused_runs,
+    load_training_run,
+    save_training_run,
+)
 
 
 def test_save_and_load_training_run(tmp_path):
