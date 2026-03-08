@@ -8,6 +8,7 @@ from typing import Optional
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
+from textual.reactive import reactive
 from textual.screen import ModalScreen
 from textual.widgets import Button, Header, Input, Label, Static, TabbedContent, TabPane
 
@@ -98,6 +99,10 @@ class ScropipeApp(App):
         Binding("4", "switch_tab('tab-generate')", "Generate", show=False),
     ]
 
+    active_pool: reactive[str] = reactive("none")
+    active_model: reactive[str] = reactive("none")
+    gpu_info: reactive[str] = reactive("detecting...")
+
     def __init__(
         self,
         models_dir: Optional[Path] = None,
@@ -125,8 +130,39 @@ class ScropipeApp(App):
         tabbed = self.query_one(TabbedContent)
         tabbed.active = tab_id
 
+    def watch_active_pool(self) -> None:
+        self._update_status_bar()
+
+    def watch_active_model(self) -> None:
+        self._update_status_bar()
+
+    def watch_gpu_info(self) -> None:
+        self._update_status_bar()
+
+    def _update_status_bar(self) -> None:
+        try:
+            bar = self.query_one("#status-bar", Static)
+            bar.update(
+                f"Pool: {self.active_pool} | Model: {self.active_model} "
+                f"| GPU: {self.gpu_info} | Ctrl+Q: Quit"
+            )
+        except Exception:
+            pass
+
+    def _detect_gpu(self) -> None:
+        try:
+            import torch
+
+            if torch.cuda.is_available():
+                self.gpu_info = torch.cuda.get_device_name(0)
+            else:
+                self.gpu_info = "CPU"
+        except ImportError:
+            self.gpu_info = "CPU"
+
     def on_mount(self) -> None:
         """Push setup modal if directories are not configured."""
+        self._detect_gpu()
         if self.models_dir is None or self.pools_dir is None:
             self.push_screen(SetupModal(), callback=self._on_setup_complete)
 

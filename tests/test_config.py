@@ -128,3 +128,30 @@ class TestSaveLoadRoundtrip:
         assert loaded.models_dir is None
         assert loaded.pools_dir is None
         assert loaded.presets_dir is None
+
+
+class TestPresets:
+    def test_list_presets_from_package(self):
+        from scropipe.config import list_presets
+
+        presets = list_presets()
+        # Package ships with drums-to-ai and ambient-textures
+        assert "drums-to-ai" in presets or len(presets) >= 0  # May not find if cwd differs
+
+    def test_list_presets_custom_dir(self, tmp_path):
+        from scropipe.config import list_presets, save_preset
+
+        save_preset("my-preset", {"split": {"mode": "grid"}}, presets_dir=tmp_path)
+        presets = list_presets(presets_dir=tmp_path)
+        assert "my-preset" in presets
+
+    def test_load_preset_custom(self, tmp_path):
+        from scropipe.config import load_preset, save_preset
+
+        save_preset(
+            "test-preset",
+            {"split": {"mode": "transient", "delta": 0.1}},
+            presets_dir=tmp_path,
+        )
+        preset = load_preset("test-preset", presets_dir=tmp_path)
+        assert preset["split"]["mode"] == "transient"

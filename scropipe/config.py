@@ -85,3 +85,56 @@ def save_config(config: ScropipeConfig, path: Optional[Path] = None) -> None:
             lines.append(f'{field.name} = "{value}"')
 
     path.write_text("\n".join(lines) + "\n")
+
+
+def load_preset(preset_name: str, presets_dir: Optional[Path] = None) -> dict:
+    """Load preset configuration from TOML file."""
+    preset_paths = [
+        Path.cwd() / "presets" / f"{preset_name}.toml",
+        Path(__file__).parent.parent / "presets" / f"{preset_name}.toml",
+        Path.home() / ".config" / "scropipe" / "presets" / f"{preset_name}.toml",
+    ]
+    if presets_dir:
+        preset_paths.insert(0, presets_dir / f"{preset_name}.toml")
+    for path in preset_paths:
+        if path.exists():
+            with open(path, "rb") as f:
+                return tomllib.load(f)
+    raise FileNotFoundError(f"Preset not found: {preset_name}")
+
+
+def list_presets(presets_dir: Optional[Path] = None) -> list[str]:
+    """List available preset names."""
+    preset_dirs = [
+        Path.cwd() / "presets",
+        Path(__file__).parent.parent / "presets",
+        Path.home() / ".config" / "scropipe" / "presets",
+    ]
+    if presets_dir:
+        preset_dirs.insert(0, presets_dir)
+    names: set[str] = set()
+    for d in preset_dirs:
+        if d.exists():
+            for f in d.glob("*.toml"):
+                names.add(f.stem)
+    return sorted(names)
+
+
+def save_preset(name: str, config: dict, presets_dir: Optional[Path] = None) -> Path:
+    """Save a preset to the user's config directory."""
+    target_dir = presets_dir or (Path.home() / ".config" / "scropipe" / "presets")
+    target_dir.mkdir(parents=True, exist_ok=True)
+    path = target_dir / f"{name}.toml"
+    lines: list[str] = []
+    for section, values in config.items():
+        lines.append(f"[{section}]")
+        for key, value in values.items():
+            if isinstance(value, bool):
+                lines.append(f"{key} = {'true' if value else 'false'}")
+            elif isinstance(value, str):
+                lines.append(f'{key} = "{value}"')
+            else:
+                lines.append(f"{key} = {value}")
+        lines.append("")
+    path.write_text("\n".join(lines))
+    return path
