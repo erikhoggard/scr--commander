@@ -11,6 +11,7 @@ from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Button, Header, Input, Label, Static, TabbedContent, TabPane
 
+from .generate_tab import GenerateTab
 from .pool_tab import PoolTab
 from .split_tab import SplitTab
 from .train_tab import TrainTab
@@ -116,7 +117,7 @@ class ScropipeApp(App):
             with TabPane("Train", id="tab-train"):
                 yield TrainTab()
             with TabPane("Generate", id="tab-generate"):
-                yield Label("Generate tab content", classes="tab-content")
+                yield GenerateTab()
         yield Static("Ready", id="status-bar")
 
     def action_switch_tab(self, tab_id: str) -> None:
