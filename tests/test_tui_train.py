@@ -114,5 +114,15 @@ async def test_train_tab_dashboard_has_controls(app):
         assert app.query_one("#dash-sparkline") is not None
         assert app.query_one("#dash-timing") is not None
         assert app.query_one("#dash-checkpoint") is not None
-        assert app.query_one("#stop-save-btn") is not None
-        assert app.query_one("#stop-discard-btn") is not None
+        assert app.query_one("#stop-training-btn") is not None
+
+
+@pytest.mark.asyncio
+async def test_train_tab_dashboard_has_single_stop_button(app):
+    async with app.run_test() as pilot:
+        tabbed = app.query_one("TabbedContent")
+        tabbed.active = "tab-train"
+        await pilot.pause()
+        assert app.query_one("#stop-training-btn") is not None
+        assert len(app.query("#stop-save-btn")) == 0
+        assert len(app.query("#stop-discard-btn")) == 0

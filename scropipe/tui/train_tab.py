@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import signal
 import subprocess
 import threading
 import time
@@ -146,8 +147,7 @@ class TrainDashboard(Static):
             yield Static("Elapsed: 0:00 | ETA: -", id="dash-timing")
             yield Static("No checkpoints yet", id="dash-checkpoint")
             with Horizontal(classes="action-bar"):
-                yield Button("Stop & Save", variant="primary", id="stop-save-btn")
-                yield Button("Stop & Discard", variant="error", id="stop-discard-btn")
+                yield Button("Stop Training", variant="warning", id="stop-training-btn")
 
     def update_metrics(self, step: int, loss: float, delta: float) -> None:
         """Update the dashboard metrics display and sparkline."""
@@ -226,10 +226,8 @@ class TrainTab(Static):
         """Handle button presses for training controls."""
         if event.button.id == "start-training-btn":
             self._start_training()
-        elif event.button.id == "stop-save-btn":
-            self._stop_training(save=True)
-        elif event.button.id == "stop-discard-btn":
-            self._stop_training(save=False)
+        elif event.button.id == "stop-training-btn":
+            self._stop_training()
 
     def _start_training(self) -> None:
         """Validate inputs and start the training process."""
@@ -356,24 +354,27 @@ class TrainTab(Static):
         except Exception:
             pass
 
-    def _stop_training(self, save: bool) -> None:
-        """Stop the training process."""
+    def _stop_training(self) -> None:
+        """Stop the training process gracefully via SIGINT."""
         self._stop_requested.set()
 
-        # Terminate subprocess if running
         if self._training_process is not None:
             try:
-                self._training_process.terminate()
-            except Exception:
+                self._training_process.send_signal(signal.SIGINT)
+            except (ProcessLookupError, OSError):
                 pass
+            # Wait up to 10s for graceful shutdown, then SIGTERM
+            try:
+                self._training_process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                try:
+                    self._training_process.terminate()
+                except (ProcessLookupError, OSError):
+                    pass
             self._training_process = None
 
-        if save:
-            self._update_status("Training stopped. Model saved.")
-            # In production: export model and save to models_dir
-        else:
-            self._update_status("Training stopped. Results discarded.")
-            self._switch_to_config()
+        self._update_status("Training stopped. Checkpoints preserved.")
+        self._switch_to_config()
 
     def _update_status(self, message: str) -> None:
         """Update the app status bar."""
