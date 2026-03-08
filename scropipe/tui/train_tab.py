@@ -210,8 +210,13 @@ class TrainTab(Static):
         yield TrainDashboard(id="train-dashboard")
 
     def on_mount(self) -> None:
-        """Hide dashboard on initial mount."""
+        """Hide dashboard on initial mount and reconcile stale runs."""
         self.query_one("#train-dashboard", TrainDashboard).display = False
+        models_dir = getattr(self.app, "models_dir", None)
+        if models_dir is not None:
+            from ..training_state import reconcile_stale_runs
+
+            reconcile_stale_runs(models_dir)
 
     def _switch_to_dashboard(self) -> None:
         """Switch from config view to dashboard view."""
@@ -233,8 +238,8 @@ class TrainTab(Static):
             self._stop_training()
 
     def _resume_training(self) -> None:
-        """Show resumable runs and resume selected one."""
-        from ..training_state import list_paused_runs
+        """Show resumable runs and resume the selected one."""
+        from ..training_state import find_checkpoint_dir, list_paused_runs
 
         models_dir = getattr(self.app, "models_dir", None)
         if models_dir is None:
@@ -246,10 +251,34 @@ class TrainTab(Static):
             self._update_status("No paused training runs found.")
             return
 
-        # For now, resume the most recent paused run
+        # Resume the most recent paused run
         run = paused[-1]
+        output_dir = Path(run.output_dir)
+
+        ckpt_dir = find_checkpoint_dir(output_dir)
+        if ckpt_dir is None:
+            self._update_status(f"No checkpoints found for {run.model_name}.")
+            return
+
+        # Set up dashboard
+        dashboard = self.query_one("#train-dashboard", TrainDashboard)
+        dashboard.reset()
+        dashboard.set_title(f"{run.model_name} (resumed)")
+        dashboard.set_info(run.pool_name, run.architecture)
+
+        # Switch views
+        self._switch_to_dashboard()
         self._update_status(f"Resuming {run.model_name}...")
-        # Full resume flow will be implemented in Task 7
+
+        # Start the training worker thread with checkpoint
+        self._stop_requested.clear()
+        self._training_thread = threading.Thread(
+            target=self._training_worker,
+            args=(run.pool_name, run.model_name, run.architecture, "manual", None, "500"),
+            kwargs={"ckpt_path": ckpt_dir},
+            daemon=True,
+        )
+        self._training_thread.start()
 
     def _start_training(self) -> None:
         """Validate inputs and start the training process."""

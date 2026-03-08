@@ -41,6 +41,39 @@ def load_training_run(run_dir: Path) -> Optional[TrainingRunInfo]:
     return TrainingRunInfo(**data)
 
 
+def reconcile_stale_runs(models_dir: Path) -> None:
+    """Mark any runs with status 'training' as 'paused'.
+
+    Called on TUI startup to handle cases where the TUI exited
+    without graceful shutdown.
+    """
+    if not models_dir.exists():
+        return
+    for d in models_dir.iterdir():
+        if not d.is_dir():
+            continue
+        run = load_training_run(d)
+        if run is not None and run.status == "training":
+            run.status = "paused"
+            save_training_run(run, d)
+
+
+def find_checkpoint_dir(output_dir: Path) -> Optional[Path]:
+    """Find the RAVE checkpoint directory inside a training output dir.
+
+    Searches for runs/*/version_*/checkpoints/ containing .ckpt files.
+    Returns the checkpoint directory path, or None if not found.
+    """
+    if not output_dir.exists():
+        return None
+    ckpt_files = list(output_dir.rglob("*.ckpt"))
+    if not ckpt_files:
+        return None
+    # Return the parent directory of the most recent checkpoint
+    newest = max(ckpt_files, key=lambda p: p.stat().st_mtime)
+    return newest.parent
+
+
 def list_paused_runs(models_dir: Path) -> list[TrainingRunInfo]:
     """Find all training runs with status 'paused' or 'training' (stale)."""
     if not models_dir.exists():
