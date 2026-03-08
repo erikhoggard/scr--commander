@@ -383,6 +383,7 @@ class TrainTab(Static):
 
         pm = PoolManager(pools_dir)
         try:
+            pm.get_pool(pool_name)  # Verify pool exists (raises KeyError)
             samples_dir = pm.get_samples_dir(pool_name)
         except KeyError:
             self.app.call_from_thread(
@@ -493,11 +494,14 @@ class TrainTab(Static):
             save_training_run(run_info, run_dir)
             return
 
+        # Capture local reference to avoid race with _stop_training
+        proc = self._training_process
+
         # Read stdout and parse metrics
         last_step = 0
         prev_loss = 0.0
         try:
-            for line in self._training_process.stdout:
+            for line in proc.stdout:
                 if self._stop_requested.is_set():
                     break
 
@@ -549,15 +553,12 @@ class TrainTab(Static):
         except Exception:
             pass
 
-        # Wait for process to finish
-        if self._training_process is not None:
-            try:
-                returncode = self._training_process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                returncode = None
-            self._training_process = None
-        else:
+        # Wait for process to finish (use local ref to avoid race)
+        try:
+            returncode = proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
             returncode = None
+        self._training_process = None
 
         # Update sidecar status
         if self._stop_requested.is_set():

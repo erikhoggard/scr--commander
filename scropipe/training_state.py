@@ -37,8 +37,11 @@ def load_training_run(run_dir: Path) -> Optional[TrainingRunInfo]:
     path = run_dir / "training_run.json"
     if not path.exists():
         return None
-    data = json.loads(path.read_text())
-    return TrainingRunInfo(**data)
+    try:
+        data = json.loads(path.read_text())
+        return TrainingRunInfo(**data)
+    except (json.JSONDecodeError, TypeError, KeyError):
+        return None
 
 
 def reconcile_stale_runs(models_dir: Path) -> None:
