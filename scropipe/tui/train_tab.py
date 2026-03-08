@@ -363,15 +363,20 @@ class TrainTab(Static):
                 self._training_process.send_signal(signal.SIGINT)
             except (ProcessLookupError, OSError):
                 pass
-            # Wait up to 10s for graceful shutdown, then SIGTERM
-            try:
-                self._training_process.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                try:
-                    self._training_process.terminate()
-                except (ProcessLookupError, OSError):
-                    pass
+            # Offload blocking wait to a thread to avoid freezing the UI
+            proc = self._training_process
             self._training_process = None
+
+            def _wait_and_cleanup():
+                try:
+                    proc.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    try:
+                        proc.terminate()
+                    except (ProcessLookupError, OSError):
+                        pass
+
+            threading.Thread(target=_wait_and_cleanup, daemon=True).start()
 
         self._update_status("Training stopped. Checkpoints preserved.")
         self._switch_to_config()
