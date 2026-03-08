@@ -140,6 +140,15 @@ def run(
         False, "--resume", "-r",
         help="Resume from existing pipeline state",
     ),
+    # Generation options
+    no_train: bool = typer.Option(
+        False, "--no-train",
+        help="Skip training, go straight to export + generate from existing checkpoint",
+    ),
+    seed_dir: Optional[Path] = typer.Option(
+        None, "--seed-dir",
+        help="Directory of audio files to use as generation input (default: training pool)",
+    ),
     # Split-specific options
     delta: float = typer.Option(
         0.07, "--delta",
@@ -188,8 +197,8 @@ def run(
         # Full pipeline with custom settings
         scropipe run -i drums.wav -I ~/samples/synths/ --synthesize --epochs 200 --count 50
     """
-    # Validate inputs
-    if not input_files and not include_dirs:
+    # Validate inputs (not needed when resuming — inputs are in pipeline.json)
+    if not resume and not input_files and not include_dirs:
         console.print("[red]Error: Must specify at least one --input or --include[/red]")
         console.print()
         console.print("Examples:")
@@ -232,6 +241,10 @@ def run(
         resume=resume,
     )
 
+    # --no-train implies --synthesize (you want export+generate)
+    if no_train:
+        final_synthesize = True
+
     success = pipeline.run(
         split_mode=final_split,
         synthesize=final_synthesize,
@@ -243,6 +256,8 @@ def run(
         vocoder_epochs=vocoder_epochs,
         model=model,
         rave_config=rave_config,
+        seed_dir=seed_dir,
+        no_train=no_train,
         **split_kwargs,
     )
 
@@ -528,6 +543,181 @@ def synthesize(
         console.print()
         console.print(f"[green]Success![/green] Generated {count} AI samples")
         console.print(f"[dim]Output: {generate.output_dir}[/dim]")
+
+
+@app.command("train")
+def train_cmd(
+    output: Path = typer.Option(
+        ..., "-o", "--output",
+        help="Pipeline output directory (must contain pipeline.json)",
+    ),
+    epochs: Optional[int] = typer.Option(
+        None, "-e", "--epochs",
+        help="Max training steps (default: RAVE default of 6M)",
+    ),
+):
+    """Resume RAVE training from the last checkpoint.
+
+    Example:
+        scropipe train -o ./scropipe-output
+        scropipe train -o ./scropipe-output --epochs 5000
+    """
+    from .pipeline import Pipeline, StageStatus
+
+    output = Path(output).resolve()
+    state_file = output / "pipeline.json"
+    if not state_file.exists():
+        console.print(f"[red]No pipeline.json found in {output}[/red]")
+        console.print("Run 'scropipe run' first to create a pipeline.")
+        raise typer.Exit(1)
+
+    pipeline = Pipeline(output_dir=output, resume=True)
+    state = pipeline.state
+
+    # Must have preprocessed data
+    preprocess_output = pipeline._get_stage_output("rave_preprocess")
+    if not preprocess_output:
+        console.print("[red]No RAVE preprocessed data found. Run the full pipeline first.[/red]")
+        raise typer.Exit(1)
+
+    # Reset train stage so it actually runs
+    if "rave_train" in state.stages:
+        state.stages["rave_train"].status = StageStatus.PENDING
+
+    # Find checkpoint to resume from
+    ckpt = pipeline._find_rave_checkpoint()
+    if ckpt:
+        console.print(f"[bold]Resuming RAVE training from checkpoint[/bold]")
+        console.print(f"[dim]  Checkpoint: {ckpt}[/dim]")
+    else:
+        console.print("[bold]Starting RAVE training from scratch[/bold]")
+
+    rave_config = state.config.get("rave_config", "v2")
+
+    pipeline._update_stage_state("rave_train", StageStatus.RUNNING)
+
+    result = pipeline.stages["rave_train"].run(
+        data_dir=preprocess_output,
+        config=rave_config,
+        epochs=epochs,
+        ckpt=ckpt,
+    )
+
+    if not result.success:
+        pipeline._update_stage_state("rave_train", StageStatus.FAILED, result)
+        console.print(f"[red]Training failed: {result.message}[/red]")
+        raise typer.Exit(1)
+
+    pipeline._update_stage_state("rave_train", StageStatus.COMPLETED, result)
+    console.print(f"[green]Training complete![/green]")
+    console.print(f"[dim]Run 'scropipe generate -o {output}' to generate audio.[/dim]")
+
+
+@app.command("generate")
+def generate_cmd(
+    output: Path = typer.Option(
+        ..., "-o", "--output",
+        help="Pipeline output directory (must contain pipeline.json)",
+    ),
+    count: int = typer.Option(
+        10, "-c", "--count",
+        help="Number of samples to generate",
+    ),
+    seed_dir: Optional[Path] = typer.Option(
+        None, "--seed-dir",
+        help="Directory of audio to use as input (default: training pool)",
+    ),
+):
+    """Generate audio from a trained RAVE model.
+
+    Exports the model if needed, then generates samples.
+
+    Example:
+        scropipe generate -o ./scropipe-output --count 20
+        scropipe generate -o ./scropipe-output --count 20 --seed-dir ./other-audio/
+    """
+    from .pipeline import Pipeline, PipelineState, StageStatus, StageResult
+
+    output = Path(output).resolve()
+    state_file = output / "pipeline.json"
+    if not state_file.exists():
+        console.print(f"[red]No pipeline.json found in {output}[/red]")
+        console.print("Run 'scropipe run' first to create a pipeline.")
+        raise typer.Exit(1)
+
+    pipeline = Pipeline(output_dir=output, resume=True)
+    state = pipeline.state
+
+    # Find the trained model's run dir
+    ckpt = pipeline._find_rave_checkpoint()
+    if not ckpt:
+        console.print("[red]No RAVE checkpoint found. Train first with 'scropipe train'.[/red]")
+        raise typer.Exit(1)
+
+    # Find run dir (directory containing config.gin)
+    run_dir = ckpt.parent
+    while run_dir != run_dir.parent:
+        if (run_dir / "config.gin").exists():
+            break
+        run_dir = run_dir.parent
+    else:
+        console.print("[red]Could not find RAVE run directory (no config.gin)[/red]")
+        raise typer.Exit(1)
+
+    # Mark train as completed with correct run dir
+    pipeline._update_stage_state(
+        "rave_train",
+        StageStatus.COMPLETED,
+        StageResult(success=True, output_dir=run_dir, message="Using existing checkpoint"),
+    )
+
+    # Export if needed
+    existing_ts = list(run_dir.glob("**/*.ts"))
+    if existing_ts:
+        model_path = existing_ts[0]
+        console.print(f"[dim]Model already exported: {model_path.name}[/dim]")
+    else:
+        console.print("[bold]Exporting RAVE model...[/bold]")
+        pipeline._update_stage_state("rave_export", StageStatus.RUNNING)
+        result = pipeline.stages["rave_export"].run(run_dir=run_dir)
+        if not result.success:
+            pipeline._update_stage_state("rave_export", StageStatus.FAILED, result)
+            console.print(f"[red]Export failed: {result.message}[/red]")
+            raise typer.Exit(1)
+        pipeline._update_stage_state("rave_export", StageStatus.COMPLETED, result)
+        ts_files = list(run_dir.glob("**/*.ts"))
+        if not ts_files:
+            console.print("[red]Export succeeded but no .ts file found[/red]")
+            raise typer.Exit(1)
+        model_path = ts_files[0]
+
+    # Determine seed audio
+    if seed_dir:
+        gen_input = Path(seed_dir).resolve()
+        console.print(f"[dim]Seed audio: {gen_input}[/dim]")
+    else:
+        gen_input = pipeline._get_stage_output("collect")
+        if not gen_input:
+            console.print("[red]No pool directory found and no --seed-dir specified[/red]")
+            raise typer.Exit(1)
+
+    # Generate
+    console.print(f"[bold]Generating {count} samples...[/bold]")
+    pipeline._update_stage_state("rave_generate", StageStatus.RUNNING)
+    result = pipeline.stages["rave_generate"].run(
+        model_path=model_path,
+        input_dir=gen_input,
+        count=count,
+    )
+
+    if not result.success:
+        pipeline._update_stage_state("rave_generate", StageStatus.FAILED, result)
+        console.print(f"[red]Generation failed: {result.message}[/red]")
+        raise typer.Exit(1)
+
+    pipeline._update_stage_state("rave_generate", StageStatus.COMPLETED, result)
+    console.print(f"[green]Done![/green] {result.message}")
+    console.print(f"[dim]Output: {pipeline.stages['rave_generate'].output_dir}[/dim]")
 
 
 @app.command()

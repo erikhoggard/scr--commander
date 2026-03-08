@@ -123,6 +123,7 @@ class RaveTrainStage(Stage):
         gpu: Optional[int] = None,
         workers: int = 0,  # 0 disables multiprocessing, avoids ROCm segfaults
         val_every: int = 500,  # Checkpoint every N steps (default 10000 is too infrequent)
+        ckpt: Optional[Path] = None,
     ) -> StageResult:
         """Run RAVE training.
 
@@ -136,6 +137,7 @@ class RaveTrainStage(Stage):
             gpu: GPU index to use (auto-detected if None).
             workers: Number of DataLoader workers (0 to disable multiprocessing).
             val_every: Save checkpoint every N steps (default: 500).
+            ckpt: Path to checkpoint to resume training from.
 
         Returns:
             StageResult with success status.
@@ -187,6 +189,9 @@ class RaveTrainStage(Stage):
         if epochs is not None:
             cmd.extend(["--max_steps", str(epochs)])
 
+        if ckpt is not None:
+            cmd.extend(["--ckpt", str(ckpt)])
+
         try:
             result = subprocess.run(cmd, check=False, cwd=str(output_dir))
 
@@ -194,6 +199,7 @@ class RaveTrainStage(Stage):
                 self.log_error("RAVE training failed")
                 return StageResult(
                     success=False,
+                    output_dir=output_dir,
                     message=f"rave train exited with code {result.returncode}",
                 )
 
@@ -359,6 +365,10 @@ class RaveGenerateStage(Stage):
             for f in wav_files:
                 try:
                     x, sr = torchaudio.load(str(f))
+
+                    # Convert to mono if needed (model expects 1 channel)
+                    if x.shape[0] > 1:
+                        x = x.mean(dim=0, keepdim=True)
 
                     # Resample if needed
                     if sr != model.sr:

@@ -230,6 +230,8 @@ Run the complete pipeline with flexible input sources.
 | `--synthesize` | Run synthesis stages after collecting |
 | `-p, --preset` | Use a preset configuration |
 | `-r, --resume` | Resume from existing pipeline state |
+| `--no-train` | Skip training, go straight to export + generate from existing checkpoint |
+| `--seed-dir` | Directory of audio to use as generation input (default: training pool) |
 
 Split options:
 | Option | Description |
@@ -336,195 +338,91 @@ count = 10
 
 ## Pipeline Stages
 
+### VAE Pipeline (default)
+
 1. **Split** - Chop audio files (transient detection, grid, or texture gating)
 2. **Collect** - Pool samples from split outputs and included directories
-3. **Preprocess** - Convert samples to mel-spectrograms for training
-4. **Train** - Train a VAE model on the preprocessed data
-5. **Train Vocoder** (optional) - Train HiFi-GAN for higher quality audio (with `--train-vocoder`)
-6. **Generate** - Synthesize new samples from the trained model
+3. **Preprocess** - Convert samples to mel-spectrograms
+4. **Train** - Train a VAE model
+5. **Train Vocoder** (optional) - Train HiFi-GAN for higher quality (`--train-vocoder`)
+6. **Generate** - Synthesize new samples
 
-## Tips for Better Results
+### RAVE Pipeline (`--model rave`)
 
-VAEs need sufficient training data to learn meaningful representations. If your generated samples sound similar or have artifacts:
+1. **Split** - Same as VAE
+2. **Collect** - Same as VAE
+3. **RAVE Preprocess** - Convert audio to RAVE training database
+4. **RAVE Train** - Train the model (hours/days)
+5. **RAVE Export** - Convert checkpoint to `.ts` model
+6. **RAVE Generate** - Feed seed audio through model to produce output
 
-### Get More Training Data
-
-```bash
-# Lower delta = more aggressive splitting = more samples
-scropipe run -i recording.wav --synthesize --delta 0.005
-
-# Split multiple source files
-scropipe run -i drums.wav -i percussion.wav -i hits.wav --synthesize
-
-# Include existing sample libraries
-scropipe run -i recording.wav -I ~/samples/drums/ --synthesize
-```
-
-### Use Data Augmentation
-
-The `--augment` flag creates pitch-shifted and time-stretched variants of your samples:
-
-```bash
-scropipe run -i recording.wav --synthesize --augment --epochs 200
-```
-
-### Adjust Training Parameters
-
-```bash
-# More epochs for better learning (but watch for overfitting)
-scropipe run -i drums.wav --synthesize --epochs 300
-
-# Generate more samples to find good ones
-scropipe run -i drums.wav --synthesize --count 100
-```
-
-### Sample Count Guidelines
-
-- **< 50 samples**: Results will likely be poor or repetitive
-- **50-200 samples**: Reasonable results with augmentation
-- **200+ samples**: Best results, model can learn meaningful variations
-
-### RAVE for Melodic Content
-
-For **piano, melodic, or harmonic content**, use RAVE instead of VAE:
-
-```bash
-# Use RAVE for high-quality melodic synthesis (requires longer chunks)
-scropipe run -i piano.wav --synthesize --model rave --count 20 --chunk-length 6
-
-# Or with the synthesize command
-scropipe synthesize ./samples --model rave --rave-config v2
-```
+## Choosing a Model
 
 | Model | Best For | Training Time | Min Chunk Length |
 |-------|----------|---------------|------------------|
-| `vae` (default) | Drums, percussion, textures | Fast | 0.5s |
-| `rave` | Piano, melodic, harmonic | Several hours | 6s |
-
-RAVE produces much higher quality output for tonal content because it works directly on audio waveforms with a neural vocoder.
-
-#### RAVE Training Workflow
-
-RAVE trains for up to 6 million steps by default, which can take many hours or days. The pipeline runs these stages:
-
-1. **RAVE Preprocess** - converts audio to training database
-2. **RAVE Train** - trains the model (long-running)
-3. **RAVE Export** - converts checkpoint to usable model
-4. **RAVE Generate** - creates your output samples
-
-**Stopping early:** You can stop training with `Ctrl+C` when the loss stabilizes. Early results (50-100 epochs) will be rough but recognizable. Several hundred epochs produces decent quality. Checkpoints are saved every 500 steps (~30 epochs).
-
-If you stop early, the pipeline won't complete the export/generate stages. Run them manually:
+| `vae` (default) | Drums, percussion, textures | Minutes | 0.5s |
+| `rave` | Piano, melodic, harmonic | Hours | 6s |
 
 ```bash
-# Export the trained model (finds the latest checkpoint automatically)
-rave export --run scropipe-output/03-rave-model/model/
+# VAE (fast, good for percussion)
+scropipe run -i drums.wav --synthesize --epochs 200 --count 50
 
-# Find the exported model
-ls scropipe-output/03-rave-model/model/**/checkpoints/*.ts
+# RAVE (slow, better for melodic content)
+scropipe run -i piano.wav --synthesize --model rave --count 20 --chunk-length 6
 ```
 
-**Note:** The `rave generate` CLI has a bug, so use Python directly for generation:
+## Typical Workflow
 
-```python
-import torch
-import torchaudio
-from pathlib import Path
-
-model = torch.jit.load("path/to/model.ts")
-model = model.to("cuda:0")  # or "cpu"
-
-x, sr = torchaudio.load("input.wav")
-if sr != model.sr:
-    x = torchaudio.functional.resample(x, sr, model.sr)
-
-with torch.no_grad():
-    out = model.forward(x[None].to("cuda:0"))
-
-torchaudio.save("output.wav", out[0].cpu(), sample_rate=model.sr)
-```
-
-Or let scropipe handle it - the pipeline uses the Python API directly to avoid the CLI bug.
-
-**Resuming training:** RAVE saves checkpoints periodically. Resume from where you left off:
+### 1. Slice audio
 
 ```bash
-# First, find your checkpoints
-ls scropipe-output/03-rave-model/model_*/version_*/checkpoints/*.ckpt
-
-# Linux - use the full path to the checkpoint file
-rave train --config v2 \
-    --db_path scropipe-output/02-rave-data \
-    --name model \
-    --ckpt scropipe-output/03-rave-model/model_XXXX/version_0/checkpoints/epoch-epoch=0100.ckpt \
-    --gpu 0 --workers 0
+scropipe run -i piano.wav --chunk-length 6
 ```
 
-```powershell
-# Windows (PowerShell) - find checkpoints first
-Get-ChildItem -Recurse scropipe-output/03-rave-model -Filter "*.ckpt"
-
-# Resume with full path to checkpoint file
-rave train --config v2 `
-    --db_path scropipe-output/02-rave-data `
-    --name model `
-    --ckpt scropipe-output/03-rave-model/model_XXXX/version_0/checkpoints/epoch-epoch=0100.ckpt `
-    --gpu 0
-```
-
-**Note:** The `--ckpt` flag requires the full path to a `.ckpt` file, not just the directory.
-
-**Testing during training:** You can export and test a checkpoint while training continues (in another terminal):
+### 2. Slice + train
 
 ```bash
-# Export current checkpoint
-rave export --run scropipe-output/03-rave-model/model/
-
-# The .ts file will be in the checkpoints folder
-ls scropipe-output/03-rave-model/model/**/checkpoints/*.ts
-
-# Generate a test sample using Python (see above) or let training finish
-# and run the full pipeline which handles generation automatically
+scropipe run -i piano.wav --synthesize --model rave --chunk-length 6
 ```
 
-#### Windows / NVIDIA GPU Notes
+Training takes hours. Ctrl+C anytime — checkpoints are saved every 500 steps.
 
-RAVE works on Windows with NVIDIA GPUs, but getting there requires patience:
-
-- **Python 3.12 only** — PyTorch has no wheels for 3.13+ on Windows
-- Use `--chunk-length 6` or longer (RAVE's preprocessing has a bug with short audio)
-- Training should work with default `--workers 8` (reduce if you hit memory issues)
-- You will see warnings about Tensor Cores and `weight_norm` deprecation — these are harmless
-
-```powershell
-# Example on Windows
-scropipe run -i .\audio\piano.wav --synthesize --model rave --chunk-length 6
-```
-
-#### AMD GPU (ROCm) Notes
-
-RAVE works with AMD GPUs via ROCm (Linux only), but requires some adjustments:
-
-- Use `--chunk-length 6` or longer (RAVE's preprocessing has a bug with short audio)
-- Training uses `--workers 0` to avoid multiprocessing segfaults
-- The `amdgpu.ids: No such file or directory` warning is harmless
-- `MIOpen` workspace warnings are normal (ROCm kernel autotuning)
-
-### Neural Vocoder (VAE only)
-
-For VAE with cleaner audio, train a HiFi-GAN vocoder:
+### 3. Resume training
 
 ```bash
-scropipe run -i drums.wav --synthesize --train-vocoder --vocoder-epochs 50
+scropipe train -o ./scropipe-output
 ```
 
-| Dataset Size | Recommendation |
-|--------------|----------------|
-| < 100 samples | Skip vocoder, use Griffin-Lim |
-| 100-300 samples | Vocoder might help, worth trying |
-| 300+ samples | Vocoder likely to outperform Griffin-Lim |
+Finds the latest checkpoint and continues training.
 
-The vocoder helps most with tonal/melodic content. For percussive/noise sounds, Griffin-Lim often works fine.
+### 4. Generate audio
+
+```bash
+scropipe generate -o ./scropipe-output --count 20
+
+# Use different seed audio (feed new files through the trained model)
+scropipe generate -o ./scropipe-output --count 20 --seed-dir ./other-audio/
+```
+
+Exports the model if needed, then generates samples. Run it as many times as you want with different counts or seed audio.
+
+### RAVE Training Tips
+
+- Ctrl+C when loss stabilizes. Resume continues from `last.ckpt`.
+- Early (50-100 epochs): rough. Several hundred: decent.
+- Use `--chunk-length 6` or longer (RAVE has a bug with short audio).
+
+### VAE Tips
+
+- **More data helps**: split multiple files, include sample libraries with `-I`, use `--augment`
+- **50+ samples** for reasonable results, 200+ for best results
+- **Vocoder** (`--train-vocoder`): helps with tonal content, not needed for percussion
+
+## GPU Notes
+
+**Windows/NVIDIA:** Python 3.12 only (no PyTorch wheels for 3.13+). Tensor Core and `weight_norm` warnings are harmless.
+
+**AMD/ROCm (Linux only):** Uses `--workers 0` to avoid segfaults. `amdgpu.ids` and `MIOpen` warnings are harmless.
 
 ## Package Structure
 

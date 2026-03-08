@@ -131,6 +131,7 @@ class Pipeline:
     """Orchestrates the audio processing pipeline."""
 
     STAGE_ORDER = ["split", "collect", "preprocess", "train", "train_vocoder", "generate"]
+    RAVE_STAGE_ORDER = ["split", "collect", "rave_preprocess", "rave_train", "rave_export", "rave_generate"]
 
     def __init__(
         self,
@@ -149,6 +150,7 @@ class Pipeline:
         """
         self.input_files = [Path(f).resolve() for f in (input_files or [])]
         self.include_dirs = [Path(d).resolve() for d in (include_dirs or [])]
+        self.resume = resume
 
         if output_dir:
             self.output_base = Path(output_dir).resolve()
@@ -160,6 +162,11 @@ class Pipeline:
         if resume and self.state_file.exists():
             self.state = PipelineState.load(self.state_file)
             console.print(f"[dim]Resuming pipeline from {self.state_file}[/dim]")
+            # Restore inputs from saved state if not provided on CLI
+            if not self.input_files and self.state.input_files:
+                self.input_files = [Path(f) for f in self.state.input_files]
+            if not self.include_dirs and self.state.include_dirs:
+                self.include_dirs = [Path(d) for d in self.state.include_dirs]
         else:
             self.state = PipelineState(
                 input_files=[str(f) for f in self.input_files],
@@ -181,6 +188,10 @@ class Pipeline:
             "train": TrainStage(self.output_base),
             "train_vocoder": TrainVocoderStage(self.output_base),
             "generate": GenerateStage(self.output_base),
+            "rave_preprocess": RavePreprocessStage(self.output_base),
+            "rave_train": RaveTrainStage(self.output_base),
+            "rave_export": RaveExportStage(self.output_base),
+            "rave_generate": RaveGenerateStage(self.output_base),
         }
 
     def _update_stage_state(
@@ -237,6 +248,8 @@ class Pipeline:
         vocoder_epochs: int = 50,
         model: str = "vae",
         rave_config: str = "v2",
+        seed_dir: Optional[Path] = None,
+        no_train: bool = False,
         **split_kwargs,
     ) -> bool:
         """Run the complete pipeline.
@@ -252,6 +265,7 @@ class Pipeline:
             vocoder_epochs: Vocoder training epochs.
             model: Model type ('vae' or 'rave').
             rave_config: RAVE config (v2, v2_small, etc.).
+            seed_dir: Directory of audio to use as generation input (default: pool).
             **split_kwargs: Additional arguments for split stage.
 
         Returns:
@@ -263,6 +277,12 @@ class Pipeline:
             return False
 
         self.output_base.mkdir(parents=True, exist_ok=True)
+
+        # On resume, preserve the model type from the saved config
+        # (avoids requiring --model rave on every resume command)
+        if self.resume and self.state.config.get("model"):
+            model = self.state.config["model"]
+            rave_config = self.state.config.get("rave_config", rave_config)
 
         # Store config
         self.state.config = {
@@ -382,14 +402,17 @@ class Pipeline:
             console.print("[red]Cannot find pool output[/red]")
             return False
 
+        # Use seed_dir for generation input if specified, otherwise use pool
+        gen_input = Path(seed_dir).resolve() if seed_dir else pool_output
+
         if use_rave:
             # RAVE pipeline (for melodic/harmonic content)
-            return self._run_rave_synthesis(pool_output, epochs, count, rave_config)
+            return self._run_rave_synthesis(pool_output, gen_input, epochs, count, rave_config, no_train)
         else:
             # VAE pipeline (for percussion/textures)
             return self._run_vae_synthesis(
                 pool_output, augment, max_duration, epochs, count,
-                train_vocoder, vocoder_epochs
+                train_vocoder, vocoder_epochs, no_train
             )
 
     def _run_vae_synthesis(
@@ -401,8 +424,13 @@ class Pipeline:
         count: int,
         train_vocoder: bool,
         vocoder_epochs: int,
+        no_train: bool = False,
     ) -> bool:
         """Run VAE synthesis pipeline."""
+        # On resume, always re-run generation (it's fast)
+        if self.resume and "generate" in self.state.stages:
+            self.state.stages["generate"].status = StageStatus.PENDING
+
         # Stage 3: Preprocess
         if self._should_run_stage("preprocess"):
             console.print("[bold]Stage 3: Preprocess[/bold]")
@@ -430,7 +458,20 @@ class Pipeline:
             console.print("[red]Cannot find preprocess output[/red]")
             return False
 
-        if self._should_run_stage("train"):
+        if no_train and self._should_run_stage("train"):
+            console.print("[yellow]Stage 4: Train (skipped, --no-train)[/yellow]")
+            # Check if model exists from a previous run
+            train_dir = self.output_base / "03-train"
+            model_file = train_dir / "model.pth"
+            if not model_file.exists():
+                console.print(f"[red]--no-train but no model found at {model_file}[/red]")
+                return False
+            self._update_stage_state(
+                "train",
+                StageStatus.COMPLETED,
+                StageResult(success=True, output_dir=train_dir, message="Skipped (--no-train)"),
+            )
+        elif self._should_run_stage("train"):
             console.print("[bold]Stage 4: Train[/bold]")
             self._update_stage_state("train", StageStatus.RUNNING)
 
@@ -514,66 +555,163 @@ class Pipeline:
         self._print_summary()
         return True
 
+    def _find_rave_checkpoint(self) -> Optional[Path]:
+        """Find the latest RAVE checkpoint for resuming training.
+
+        Looks for 'last.ckpt' in the rave model output dir. Falls back
+        to the most recently modified .ckpt file.
+        """
+        model_dir = self.output_base / "03-rave-model"
+        if not model_dir.exists():
+            return None
+
+        # Prefer last.ckpt (PyTorch Lightning convention)
+        last_ckpts = list(model_dir.glob("**/last.ckpt"))
+        if last_ckpts:
+            return last_ckpts[0]
+
+        # Fall back to most recent .ckpt
+        all_ckpts = list(model_dir.glob("**/*.ckpt"))
+        if all_ckpts:
+            return max(all_ckpts, key=lambda p: p.stat().st_mtime)
+
+        return None
+
     def _run_rave_synthesis(
         self,
         pool_output: Path,
+        gen_input: Path,
         epochs: int,
         count: int,
         rave_config: str,
+        no_train: bool = False,
     ) -> bool:
         """Run RAVE synthesis pipeline for melodic/harmonic content."""
+        # On resume, always re-run generation (it's fast)
+        if self.resume and "rave_generate" in self.state.stages:
+            self.state.stages["rave_generate"].status = StageStatus.PENDING
+
         # Stage 3: RAVE Preprocess
-        rave_preprocess = RavePreprocessStage(self.output_base)
-        console.print("[bold]Stage 3: RAVE Preprocess[/bold]")
-        self._update_stage_state("rave_preprocess", StageStatus.RUNNING)
+        if self._should_run_stage("rave_preprocess"):
+            console.print("[bold]Stage 3: RAVE Preprocess[/bold]")
+            self._update_stage_state("rave_preprocess", StageStatus.RUNNING)
 
-        result = rave_preprocess.run(input_dir=pool_output)
+            result = self.stages["rave_preprocess"].run(input_dir=pool_output)
 
-        if not result.success:
-            self._update_stage_state("rave_preprocess", StageStatus.FAILED, result)
-            console.print(f"[red]RAVE preprocess failed: {result.message}[/red]")
+            if not result.success:
+                self._update_stage_state("rave_preprocess", StageStatus.FAILED, result)
+                console.print(f"[red]RAVE preprocess failed: {result.message}[/red]")
+                return False
+
+            self._update_stage_state("rave_preprocess", StageStatus.COMPLETED, result)
+            console.print()
+        else:
+            console.print("[dim]Stage 3: RAVE Preprocess (already completed)[/dim]")
+
+        preprocess_output = self._get_stage_output("rave_preprocess")
+        if not preprocess_output:
+            console.print("[red]Cannot find RAVE preprocess output[/red]")
             return False
-
-        self._update_stage_state("rave_preprocess", StageStatus.COMPLETED, result)
-        console.print()
 
         # Stage 4: RAVE Train
-        rave_train = RaveTrainStage(self.output_base)
-        console.print("[bold]Stage 4: RAVE Train (this takes several hours)[/bold]")
-        self._update_stage_state("rave_train", StageStatus.RUNNING)
+        if no_train:
+            # --no-train: skip training, find existing checkpoint and resolve run dir
+            ckpt = self._find_rave_checkpoint()
+            if not ckpt:
+                console.print("[red]--no-train but no checkpoint found to export from[/red]")
+                return False
+            # Find the run dir (the directory containing config.gin)
+            run_dir = ckpt.parent
+            while run_dir != run_dir.parent:
+                if (run_dir / "config.gin").exists():
+                    break
+                run_dir = run_dir.parent
+            else:
+                console.print("[red]Could not find RAVE run directory (no config.gin found)[/red]")
+                return False
+            console.print(f"[yellow]Stage 4: RAVE Train (skipped, using existing checkpoint)[/yellow]")
+            console.print(f"[dim]  Checkpoint: {ckpt}[/dim]")
+            self._update_stage_state(
+                "rave_train",
+                StageStatus.COMPLETED,
+                StageResult(success=True, output_dir=run_dir, message="Skipped (--no-train)"),
+            )
+            # Reset export so it re-runs against the correct run dir
+            if "rave_export" in self.state.stages:
+                self.state.stages["rave_export"].status = StageStatus.PENDING
+        elif self._should_run_stage("rave_train"):
+            # Check for a checkpoint to resume from
+            resume_ckpt = None
+            train_state = self.state.stages.get("rave_train")
+            if train_state and train_state.status in (StageStatus.RUNNING, StageStatus.FAILED):
+                resume_ckpt = self._find_rave_checkpoint()
+                if resume_ckpt:
+                    console.print(f"[bold]Stage 4: RAVE Train (resuming from checkpoint)[/bold]")
+                    console.print(f"[dim]  Checkpoint: {resume_ckpt}[/dim]")
+                else:
+                    console.print("[bold]Stage 4: RAVE Train (this takes several hours)[/bold]")
+            else:
+                console.print("[bold]Stage 4: RAVE Train (this takes several hours)[/bold]")
 
-        result = rave_train.run(
-            data_dir=rave_preprocess.output_dir,
-            config=rave_config,
-            epochs=epochs if epochs != 100 else None,
-        )
+            self._update_stage_state("rave_train", StageStatus.RUNNING)
 
-        if not result.success:
-            self._update_stage_state("rave_train", StageStatus.FAILED, result)
-            console.print(f"[red]RAVE training failed: {result.message}[/red]")
+            result = self.stages["rave_train"].run(
+                data_dir=preprocess_output,
+                config=rave_config,
+                epochs=epochs if epochs != 100 else None,
+                ckpt=resume_ckpt,
+            )
+
+            if not result.success:
+                self._update_stage_state("rave_train", StageStatus.FAILED, result)
+                console.print(f"[red]RAVE training failed: {result.message}[/red]")
+                return False
+
+            self._update_stage_state("rave_train", StageStatus.COMPLETED, result)
+            console.print()
+        else:
+            console.print("[dim]Stage 4: RAVE Train (already completed)[/dim]")
+
+        train_output = self._get_stage_output("rave_train")
+        if not train_output:
+            console.print("[red]Cannot find RAVE train output[/red]")
             return False
-
-        self._update_stage_state("rave_train", StageStatus.COMPLETED, result)
-        console.print()
 
         # Stage 5: RAVE Export
-        rave_export = RaveExportStage(self.output_base)
-        console.print("[bold]Stage 5: RAVE Export[/bold]")
-        self._update_stage_state("rave_export", StageStatus.RUNNING)
+        if self._should_run_stage("rave_export"):
+            # Check if .ts file already exists (export already done)
+            existing_ts = list(train_output.glob("**/*.ts"))
+            if existing_ts:
+                console.print("[yellow]Stage 5: RAVE Export (model already exported)[/yellow]")
+                self._update_stage_state(
+                    "rave_export",
+                    StageStatus.COMPLETED,
+                    StageResult(
+                        success=True,
+                        output_dir=train_output,
+                        message="RAVE model already exported",
+                        details={"model_path": str(existing_ts[0])},
+                    ),
+                )
+            else:
+                console.print("[bold]Stage 5: RAVE Export[/bold]")
+                self._update_stage_state("rave_export", StageStatus.RUNNING)
 
-        result = rave_export.run(run_dir=rave_train.output_dir)
+                result = self.stages["rave_export"].run(run_dir=train_output)
 
-        if not result.success:
-            self._update_stage_state("rave_export", StageStatus.FAILED, result)
-            console.print(f"[red]RAVE export failed: {result.message}[/red]")
-            return False
+                if not result.success:
+                    self._update_stage_state("rave_export", StageStatus.FAILED, result)
+                    console.print(f"[red]RAVE export failed: {result.message}[/red]")
+                    return False
 
-        self._update_stage_state("rave_export", StageStatus.COMPLETED, result)
-        console.print()
+                self._update_stage_state("rave_export", StageStatus.COMPLETED, result)
+                console.print()
+        else:
+            console.print("[dim]Stage 5: RAVE Export (already completed)[/dim]")
 
         # Find exported model
         model_path = None
-        for ts_file in rave_train.output_dir.glob("**/*.ts"):
+        for ts_file in train_output.glob("**/*.ts"):
             model_path = ts_file
             break
 
@@ -582,23 +720,27 @@ class Pipeline:
             return False
 
         # Stage 6: RAVE Generate
-        rave_generate = RaveGenerateStage(self.output_base)
-        console.print("[bold]Stage 6: RAVE Generate[/bold]")
-        self._update_stage_state("rave_generate", StageStatus.RUNNING)
+        if self._should_run_stage("rave_generate"):
+            console.print("[bold]Stage 6: RAVE Generate[/bold]")
+            self._update_stage_state("rave_generate", StageStatus.RUNNING)
 
-        result = rave_generate.run(
-            model_path=model_path,
-            input_dir=pool_output,
-            count=count,
-        )
+            if gen_input != pool_output:
+                console.print(f"[dim]  Seed audio: {gen_input}[/dim]")
+            result = self.stages["rave_generate"].run(
+                model_path=model_path,
+                input_dir=gen_input,
+                count=count,
+            )
 
-        if not result.success:
-            self._update_stage_state("rave_generate", StageStatus.FAILED, result)
-            console.print(f"[red]RAVE generation failed: {result.message}[/red]")
-            return False
+            if not result.success:
+                self._update_stage_state("rave_generate", StageStatus.FAILED, result)
+                console.print(f"[red]RAVE generation failed: {result.message}[/red]")
+                return False
 
-        self._update_stage_state("rave_generate", StageStatus.COMPLETED, result)
-        console.print()
+            self._update_stage_state("rave_generate", StageStatus.COMPLETED, result)
+            console.print()
+        else:
+            console.print("[dim]Stage 6: RAVE Generate (already completed)[/dim]")
 
         self._print_summary()
         return True
@@ -618,7 +760,11 @@ class Pipeline:
             StageStatus.SKIPPED: "[dim]Skipped[/dim]",
         }
 
-        for stage_name in self.STAGE_ORDER:
+        stage_order = self.STAGE_ORDER
+        if self.state.config.get("model", "").lower() == "rave":
+            stage_order = self.RAVE_STAGE_ORDER
+
+        for stage_name in stage_order:
             if stage_name in self.state.stages:
                 state = self.state.stages[stage_name]
                 status_text = status_styles.get(state.status, str(state.status))
