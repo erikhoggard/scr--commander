@@ -317,64 +317,245 @@ class TrainTab(Static):
         stop_condition: str,
         stop_value: Optional[str],
         val_every: str,
+        ckpt_path: Optional[Path] = None,
     ) -> None:
-        """Worker thread that runs the training process.
+        """Worker thread that runs the RAVE training subprocess."""
+        from ..pool_manager import PoolManager
+        from ..training_state import TrainingRunInfo, save_training_run
+        from ..utils.discovery import ToolNotFoundError, find_tool
+        from .rave_parser import parse_training_line
+        from .rave_runner import build_preprocess_cmd, build_train_cmd
 
-        This is a stub implementation. The actual training integration
-        would involve:
-        1. Getting the pool's samples dir via PoolManager
-        2. Running RAVE preprocess + train as subprocess
-        3. Parsing stdout for step/loss data
-        4. Calling update_metrics() via app.call_from_thread()
-        """
         dashboard = self.query_one("#train-dashboard", TrainDashboard)
         start_time = time.time()
+        models_dir = getattr(self.app, "models_dir", None)
 
-        # Stub: simulate training steps for now
-        # In production, this would launch a subprocess and parse its output
-        step = 0
-        while not self._stop_requested.is_set():
-            # Check stop conditions
-            if stop_condition == "max_steps" and stop_value:
-                if step >= int(stop_value):
-                    break
+        # Find rave
+        try:
+            rave_cmd = str(find_tool("rave"))
+        except ToolNotFoundError:
+            self.app.call_from_thread(
+                self._update_status,
+                "Error: RAVE not found. "
+                "Set RAVE_PATH or add rave to PATH.",
+            )
+            self.app.call_from_thread(self._switch_to_config)
+            return
 
-            step += 1
-            # Simulate a loss value decreasing over time
-            loss = 1.0 / (1.0 + step * 0.01)
-            delta = abs(loss - 1.0 / (1.0 + (step - 1) * 0.01)) if step > 1 else 0.0
+        # Resolve pool samples directory
+        pools_dir = getattr(self.app, "pools_dir", None)
+        if pools_dir is None:
+            self.app.call_from_thread(
+                self._update_status,
+                "Error: Pools directory not configured.",
+            )
+            self.app.call_from_thread(self._switch_to_config)
+            return
 
-            if stop_condition == "delta_target" and stop_value:
-                if delta > 0 and delta < float(stop_value):
-                    break
+        pm = PoolManager(pools_dir)
+        try:
+            samples_dir = pm.get_samples_dir(pool_name)
+        except KeyError:
+            self.app.call_from_thread(
+                self._update_status,
+                f"Error: Pool '{pool_name}' not found.",
+            )
+            self.app.call_from_thread(self._switch_to_config)
+            return
 
-            # Update metrics via the main thread
+        # Set up output directory
+        if models_dir is None:
+            self.app.call_from_thread(
+                self._update_status,
+                "Error: Models directory not configured.",
+            )
+            self.app.call_from_thread(self._switch_to_config)
+            return
+
+        run_dir = models_dir / model_name
+        run_dir.mkdir(parents=True, exist_ok=True)
+        output_dir = run_dir / "training_output"
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        # Preprocessing (skip if already done or resuming)
+        preprocess_dir = output_dir / "preprocessed"
+        if ckpt_path is None and not preprocess_dir.exists():
+            self.app.call_from_thread(
+                self._update_status, "Preprocessing audio..."
+            )
+            cmd = build_preprocess_cmd(
+                rave_cmd, samples_dir, preprocess_dir
+            )
             try:
-                self.app.call_from_thread(dashboard.update_metrics, step, loss, delta)
+                result = subprocess.run(
+                    cmd, check=False, capture_output=True, text=True
+                )
+                if result.returncode != 0:
+                    self.app.call_from_thread(
+                        self._update_status,
+                        "Error: Preprocessing failed "
+                        f"(exit {result.returncode}).",
+                    )
+                    self.app.call_from_thread(self._switch_to_config)
+                    return
+            except Exception as e:
+                self.app.call_from_thread(
+                    self._update_status, f"Error: {e}"
+                )
+                self.app.call_from_thread(self._switch_to_config)
+                return
 
-                # Update timing
-                elapsed = time.time() - start_time
-                elapsed_str = f"{int(elapsed // 60)}:{int(elapsed % 60):02d}"
-                self.app.call_from_thread(dashboard.update_timing, elapsed_str, "-")
+        data_dir = preprocess_dir
 
-                # Update checkpoint info
-                if val_every and int(val_every) > 0 and step % int(val_every) == 0:
+        # Build train command
+        max_steps = None
+        if stop_condition == "max_steps" and stop_value:
+            max_steps = int(stop_value)
+
+        gpu = None
+        try:
+            import torch
+
+            if torch.cuda.is_available():
+                gpu = 0
+        except ImportError:
+            pass
+
+        cmd = build_train_cmd(
+            rave_cmd=rave_cmd,
+            config=architecture,
+            data_dir=data_dir,
+            name=model_name,
+            val_every=int(val_every) if val_every else 500,
+            max_steps=max_steps,
+            gpu=gpu,
+            ckpt=ckpt_path,
+        )
+
+        # Save sidecar
+        run_info = TrainingRunInfo(
+            model_name=model_name,
+            pool_name=pool_name,
+            architecture=architecture,
+            output_dir=str(output_dir),
+            status="training",
+        )
+        save_training_run(run_info, run_dir)
+
+        # Launch training subprocess
+        self.app.call_from_thread(
+            self._update_status, f"Training {model_name}..."
+        )
+        try:
+            self._training_process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                cwd=str(output_dir),
+            )
+        except Exception as e:
+            self.app.call_from_thread(
+                self._update_status,
+                f"Error: Failed to start training: {e}",
+            )
+            self.app.call_from_thread(self._switch_to_config)
+            run_info.status = "paused"
+            save_training_run(run_info, run_dir)
+            return
+
+        # Read stdout and parse metrics
+        last_step = 0
+        prev_loss = 0.0
+        try:
+            for line in self._training_process.stdout:
+                if self._stop_requested.is_set():
+                    break
+
+                parsed = parse_training_line(line)
+                if parsed is None:
+                    continue
+
+                if parsed.get("checkpoint"):
                     self.app.call_from_thread(
                         dashboard.update_checkpoint,
-                        f"Checkpoint saved at step {step}",
+                        f"Checkpoint saved at step {last_step}",
                     )
-            except Exception:
-                break
+                    continue
 
-            self._stop_requested.wait(0.1)
+                step = parsed.get("step", last_step)
+                loss = parsed.get("loss", 0.0)
+                delta = (
+                    abs(loss - prev_loss)
+                    if prev_loss > 0
+                    else 0.0
+                )
 
-        # Training complete
-        try:
-            self.app.call_from_thread(
-                self._update_status, f"Training complete at step {step}."
-            )
+                last_step = step
+                prev_loss = loss
+
+                try:
+                    self.app.call_from_thread(
+                        dashboard.update_metrics, step, loss, delta
+                    )
+
+                    elapsed = time.time() - start_time
+                    elapsed_str = (
+                        f"{int(elapsed // 3600)}:"
+                        f"{int(elapsed % 3600 // 60):02d}"
+                        f":{int(elapsed % 60):02d}"
+                    )
+                    self.app.call_from_thread(
+                        dashboard.update_timing, elapsed_str, "-"
+                    )
+                except Exception:
+                    break
+
+                # Check delta stop condition
+                if stop_condition == "delta_target" and stop_value:
+                    if delta > 0 and delta < float(stop_value):
+                        self._stop_requested.set()
+                        break
+
         except Exception:
             pass
+
+        # Wait for process to finish
+        if self._training_process is not None:
+            try:
+                returncode = self._training_process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                returncode = None
+            self._training_process = None
+        else:
+            returncode = None
+
+        # Update sidecar status
+        if self._stop_requested.is_set():
+            run_info.status = "paused"
+            save_training_run(run_info, run_dir)
+            self.app.call_from_thread(
+                self._update_status,
+                f"Training paused at step {last_step}. "
+                "Checkpoints preserved.",
+            )
+        elif returncode == 0:
+            run_info.status = "completed"
+            save_training_run(run_info, run_dir)
+            self.app.call_from_thread(
+                self._update_status,
+                f"Training complete at step {last_step}.",
+            )
+        else:
+            run_info.status = "paused"
+            save_training_run(run_info, run_dir)
+            self.app.call_from_thread(
+                self._update_status,
+                f"Training stopped (exit {returncode}). "
+                "Checkpoints preserved.",
+            )
+
+        self.app.call_from_thread(self._switch_to_config)
 
     def _stop_training(self) -> None:
         """Stop the training process gracefully via SIGINT."""
