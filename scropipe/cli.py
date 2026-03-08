@@ -1388,7 +1388,19 @@ def models(
 
 def main():
     """Entry point for the CLI."""
-    app()
+    import sys
+    # If no subcommand given, launch TUI
+    if len(sys.argv) == 1:
+        from .tui.app import ScropipeApp
+        from .config import load_config
+        config = load_config()
+        tui = ScropipeApp(
+            models_dir=config.models_dir,
+            pools_dir=config.pools_dir,
+        )
+        tui.run()
+    else:
+        app()
 
 
 if __name__ == "__main__":
