@@ -13,6 +13,7 @@ from textual.widgets import Button, Header, Input, Label, Static, TabbedContent,
 
 from .pool_tab import PoolTab
 from .split_tab import SplitTab
+from .train_tab import TrainTab
 
 
 class SetupModal(ModalScreen[tuple[Path, Path]]):
@@ -113,7 +114,7 @@ class ScropipeApp(App):
             with TabPane("Pool", id="tab-pool"):
                 yield PoolTab()
             with TabPane("Train", id="tab-train"):
-                yield Label("Train tab content", classes="tab-content")
+                yield TrainTab()
             with TabPane("Generate", id="tab-generate"):
                 yield Label("Generate tab content", classes="tab-content")
         yield Static("Ready", id="status-bar")
