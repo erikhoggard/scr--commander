@@ -13,6 +13,8 @@ dependencies = [
     # CLI
     "typer>=0.12.0",
     "rich>=13.7.0",
+    # TUI
+    "textual>=1.0.0",
     # Splitter (lightweight)
     "numpy>=1.26.0",
     "scipy>=1.12.0",
@@ -28,7 +30,9 @@ ml = [
 ]
 dev = [
     "pytest>=7.0.0",
+    "pytest-asyncio>=0.23.0",
     "ruff>=0.1.0",
+    "textual-dev>=1.0.0",
 ]
 
 [project.scripts]
