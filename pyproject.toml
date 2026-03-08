@@ -45,6 +45,9 @@ scronchler = "scropipe.synth:main"
 [tool.hatch.build.targets.wheel]
 packages = ["scropipe"]
 
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+
 [tool.ruff]
 line-length = 100
 target-version = "py312"

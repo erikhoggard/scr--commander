@@ -1,0 +1,37 @@
+Screen {
+    layout: vertical;
+}
+
+#status-bar {
+    dock: bottom;
+    height: 1;
+    background: $surface;
+    color: $text-muted;
+    padding: 0 1;
+}
+
+TabbedContent {
+    height: 1fr;
+}
+
+.tab-content {
+    padding: 1 2;
+}
+
+.section-title {
+    margin-top: 1;
+    text-style: bold;
+}
+
+.form-group {
+    margin-bottom: 1;
+}
+
+.action-bar {
+    margin-top: 1;
+    layout: horizontal;
+}
+
+.action-bar Button {
+    margin-right: 1;
+}
