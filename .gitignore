@@ -25,6 +25,7 @@ wheels/
 .venv/
 venv/
 .rave-venv/
+.ml-venv/
 ENV/
 
 # IDE
