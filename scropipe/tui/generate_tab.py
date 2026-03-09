@@ -9,6 +9,8 @@ from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.widgets import Button, DataTable, Input, Label, ProgressBar, Select, Static
 
+from .path_suggester import PathSuggester
+
 
 class GenerateTab(Static):
     """Generation interface tab for running inference with trained RAVE models."""
@@ -43,13 +45,13 @@ class GenerateTab(Static):
 
             yield Label("Input Directory", classes="section-title")
             with Horizontal(classes="form-group"):
-                yield Input(placeholder="Path to input WAV files", id="gen-input-dir")
+                yield Input(placeholder="Path to input WAV files", id="gen-input-dir", suggester=PathSuggester())
                 yield Button("Browse", id="gen-input-browse-btn")
             yield Static("", id="gen-input-info")
 
             yield Label("Output Directory", classes="section-title")
             with Horizontal(classes="form-group"):
-                yield Input(placeholder="Path for output files", id="gen-output-dir")
+                yield Input(placeholder="Path for output files", id="gen-output-dir", suggester=PathSuggester(directories_only=True))
                 yield Button("Browse", id="gen-output-browse-btn")
 
             yield Static("", id="gen-status")
@@ -137,37 +139,31 @@ class GenerateTab(Static):
 
     def _browse_input_dir(self) -> None:
         """Open a modal to browse for the input directory."""
-        from .pool_tab import FileInputModal
+        from .browse_modal import BrowseModal
 
         self.app.push_screen(
-            FileInputModal(
-                title="Input Directory",
-                placeholder="Enter path to directory with WAV files",
-            ),
+            BrowseModal(title="Input Directory", select_type="directory"),
             callback=self._on_input_dir_selected,
         )
 
-    def _on_input_dir_selected(self, path_str: str | None) -> None:
+    def _on_input_dir_selected(self, path: Path | None) -> None:
         """Handle input directory modal result."""
-        if path_str:
-            self.query_one("#gen-input-dir", Input).value = path_str
+        if path is not None:
+            self.query_one("#gen-input-dir", Input).value = str(path)
 
     def _browse_output_dir(self) -> None:
         """Open a modal to browse for the output directory."""
-        from .pool_tab import FileInputModal
+        from .browse_modal import BrowseModal
 
         self.app.push_screen(
-            FileInputModal(
-                title="Output Directory",
-                placeholder="Enter path for output files",
-            ),
+            BrowseModal(title="Output Directory", select_type="directory"),
             callback=self._on_output_dir_selected,
         )
 
-    def _on_output_dir_selected(self, path_str: str | None) -> None:
+    def _on_output_dir_selected(self, path: Path | None) -> None:
         """Handle output directory modal result."""
-        if path_str:
-            self.query_one("#gen-output-dir", Input).value = path_str
+        if path is not None:
+            self.query_one("#gen-output-dir", Input).value = str(path)
 
     def _start_generation(self) -> None:
         """Validate inputs and start the generation process."""

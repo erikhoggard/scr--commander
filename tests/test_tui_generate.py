@@ -99,3 +99,27 @@ async def test_generate_tab_has_input_info(app):
         await pilot.pause()
         info = app.query_one("#gen-input-info")
         assert info is not None
+
+
+@pytest.mark.asyncio
+async def test_gen_input_browse_opens_browse_modal(app):
+    async with app.run_test(size=(120, 60)) as pilot:
+        tabbed = app.query_one("TabbedContent")
+        tabbed.active = "tab-generate"
+        await pilot.pause()
+        await pilot.click("#gen-input-browse-btn")
+        await pilot.pause()
+        from scropipe.tui.browse_modal import BrowseModal
+        assert any(isinstance(s, BrowseModal) for s in app.screen_stack)
+
+
+@pytest.mark.asyncio
+async def test_gen_output_browse_opens_browse_modal(app):
+    async with app.run_test(size=(120, 60)) as pilot:
+        tabbed = app.query_one("TabbedContent")
+        tabbed.active = "tab-generate"
+        await pilot.pause()
+        await pilot.click("#gen-output-browse-btn")
+        await pilot.pause()
+        from scropipe.tui.browse_modal import BrowseModal
+        assert any(isinstance(s, BrowseModal) for s in app.screen_stack)
