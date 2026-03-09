@@ -6,8 +6,11 @@ from pathlib import Path
 
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
-from textual.widgets import Button, Input, Label, RadioButton, RadioSet, Static
+from textual.widgets import Button, Input, Label, RadioButton, RadioSet, Select, Static
 from textual.worker import Worker
+
+from .browse_modal import BrowseModal
+from .path_suggester import PathSuggester
 
 
 class TransientSettings(Static):
@@ -73,7 +76,7 @@ class SplitTab(Static):
             # Source file
             yield Label("Source File", classes="section-title")
             with Horizontal(classes="form-group"):
-                yield Input(placeholder="Path to audio file", id="split-source-input")
+                yield Input(placeholder="Path to audio file", id="split-source-input", suggester=PathSuggester())
                 yield Button("Browse", id="split-browse-source")
 
             # Splitting mode
@@ -91,8 +94,12 @@ class SplitTab(Static):
             # Output directory
             yield Label("Output Directory", classes="section-title")
             with Horizontal(classes="form-group"):
-                yield Input(placeholder="Path to output directory", id="split-output-input")
+                yield Input(placeholder="Path to output directory", id="split-output-input", suggester=PathSuggester(directories_only=True))
                 yield Button("Browse", id="split-browse-output")
+
+            # Target pool selector
+            yield Label("Target Pool", classes="section-title")
+            yield Select([], id="split-pool-select", prompt="Select a pool")
 
             # Status
             yield Static("Ready", id="split-status")
@@ -101,6 +108,36 @@ class SplitTab(Static):
             with Horizontal(classes="action-bar"):
                 yield Button("Split", variant="primary", id="split-btn")
                 yield Button("Split & Add to Pool", id="split-and-pool-btn")
+
+    def on_mount(self) -> None:
+        """Populate pool selector on mount."""
+        self._refresh_pools()
+
+    def _refresh_pools(self) -> None:
+        """Refresh the pool selector dropdown with available pools."""
+        from scropipe.pool_manager import PoolManager
+
+        pool_select = self.query_one("#split-pool-select", Select)
+        pools_dir = getattr(self.app, "pools_dir", None)
+        if pools_dir is None:
+            pools_dir = Path.home() / ".local/share/scropipe/pools"
+
+        try:
+            pm = PoolManager(pools_dir)
+            pools = pm.list_pools()
+            options = [(p.name, p.name) for p in pools]
+            pool_select.set_options(options)
+        except Exception:
+            pool_select.set_options([])
+
+    def _get_pool_manager(self) -> "PoolManager":
+        """Get a PoolManager instance."""
+        from scropipe.pool_manager import PoolManager
+
+        pools_dir = getattr(self.app, "pools_dir", None)
+        if pools_dir is None:
+            pools_dir = Path.home() / ".local/share/scropipe/pools"
+        return PoolManager(pools_dir)
 
     def on_radio_set_changed(self, event: RadioSet.Changed) -> None:
         """Show/hide settings panels based on selected mode."""
@@ -128,6 +165,32 @@ class SplitTab(Static):
             self._run_split(add_to_pool=False)
         elif event.button.id == "split-and-pool-btn":
             self._run_split(add_to_pool=True)
+        elif event.button.id == "split-browse-source":
+            self.app.push_screen(
+                BrowseModal(
+                    title="Select Source File",
+                    select_type="file",
+                ),
+                self._on_browse_source,
+            )
+        elif event.button.id == "split-browse-output":
+            self.app.push_screen(
+                BrowseModal(
+                    title="Select Output Directory",
+                    select_type="directory",
+                ),
+                self._on_browse_output,
+            )
+
+    def _on_browse_source(self, path: Path | None) -> None:
+        """Callback when source file is selected from BrowseModal."""
+        if path is not None:
+            self.query_one("#split-source-input", Input).value = str(path)
+
+    def _on_browse_output(self, path: Path | None) -> None:
+        """Callback when output directory is selected from BrowseModal."""
+        if path is not None:
+            self.query_one("#split-output-input", Input).value = str(path)
 
     def _run_split(self, add_to_pool: bool = False) -> None:
         """Validate and run the split operation."""
@@ -147,6 +210,15 @@ class SplitTab(Static):
         if not output_dir:
             output_dir = str(source_path.parent / "splits")
 
+        # Validate pool selection when adding to pool
+        pool_name: str | None = None
+        if add_to_pool:
+            pool_select = self.query_one("#split-pool-select", Select)
+            if pool_select.value is Select.BLANK:
+                status.update("Error: Please select a target pool.")
+                return
+            pool_name = str(pool_select.value)
+
         # Determine mode
         radio_set = self.query_one("#split-mode-selector", RadioSet)
         mode_index = radio_set.pressed_index
@@ -161,7 +233,7 @@ class SplitTab(Static):
         status.update(f"Splitting with {mode} mode...")
 
         self.run_worker(
-            self._do_split(Path(output_dir), kwargs, add_to_pool),
+            self._do_split(Path(output_dir), kwargs, add_to_pool, pool_name),
             name="split_worker",
             thread=True,
         )
@@ -203,7 +275,11 @@ class SplitTab(Static):
         return kwargs
 
     async def _do_split(
-        self, output_dir: Path, kwargs: dict, add_to_pool: bool
+        self,
+        output_dir: Path,
+        kwargs: dict,
+        add_to_pool: bool,
+        pool_name: str | None = None,
     ) -> None:
         """Run the split stage in a worker thread."""
         from scropipe.stages import SplitStage
@@ -216,8 +292,18 @@ class SplitTab(Static):
 
             if result.success:
                 msg = f"Success: {result.message}"
-                if add_to_pool:
-                    msg += " (ready to add to pool)"
+                if add_to_pool and pool_name:
+                    try:
+                        # Collect WAV files from the output directory
+                        wav_files = sorted(result.output_dir.glob("*.wav"))
+                        if wav_files:
+                            pm = self._get_pool_manager()
+                            added = pm.add_files(pool_name, wav_files)
+                            msg += f" | Added {added} files to pool '{pool_name}'"
+                        else:
+                            msg += " | No WAV files found to add to pool"
+                    except Exception as e:
+                        msg += f" | Failed to add to pool: {e}"
                 self.app.call_from_thread(status.update, msg)
             else:
                 self.app.call_from_thread(status.update, f"Error: {result.message}")

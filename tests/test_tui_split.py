@@ -68,3 +68,37 @@ async def test_split_tab_has_split_and_pool_button(app):
         await pilot.pause()
         btn = app.query_one("#split-and-pool-btn")
         assert btn is not None
+
+
+@pytest.mark.asyncio
+async def test_split_browse_source_opens_modal(app):
+    async with app.run_test() as pilot:
+        tabbed = app.query_one("TabbedContent")
+        tabbed.active = "tab-split"
+        await pilot.pause()
+        await pilot.click("#split-browse-source")
+        await pilot.pause()
+        from scropipe.tui.browse_modal import BrowseModal
+        assert any(isinstance(s, BrowseModal) for s in app.screen_stack)
+
+
+@pytest.mark.asyncio
+async def test_split_browse_output_opens_modal(app):
+    async with app.run_test(size=(120, 60)) as pilot:
+        tabbed = app.query_one("TabbedContent")
+        tabbed.active = "tab-split"
+        await pilot.pause()
+        await pilot.click("#split-browse-output")
+        await pilot.pause()
+        from scropipe.tui.browse_modal import BrowseModal
+        assert any(isinstance(s, BrowseModal) for s in app.screen_stack)
+
+
+@pytest.mark.asyncio
+async def test_split_tab_has_pool_selector(app):
+    async with app.run_test() as pilot:
+        tabbed = app.query_one("TabbedContent")
+        tabbed.active = "tab-split"
+        await pilot.pause()
+        pool_select = app.query_one("#split-pool-select")
+        assert pool_select is not None
