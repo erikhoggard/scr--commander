@@ -12,6 +12,8 @@ from textual.reactive import reactive
 from textual.screen import ModalScreen
 from textual.widgets import Button, Header, Input, Label, Static, TabbedContent, TabPane
 
+from .path_suggester import PathSuggester
+
 from .generate_tab import GenerateTab
 from .pool_tab import PoolTab
 from .split_tab import SplitTab
@@ -51,9 +53,9 @@ class SetupModal(ModalScreen[tuple[Path, Path]]):
             yield Label("Please configure your directories to get started.")
             yield Label("")
             yield Label("Models directory:")
-            yield Input(placeholder="e.g. ~/scropipe/models", id="models-dir-input")
+            yield Input(placeholder="e.g. ~/scropipe/models", id="models-dir-input", suggester=PathSuggester(directories_only=True))
             yield Label("Pools directory:")
-            yield Input(placeholder="e.g. ~/scropipe/pools", id="pools-dir-input")
+            yield Input(placeholder="e.g. ~/scropipe/pools", id="pools-dir-input", suggester=PathSuggester(directories_only=True))
             yield Label("", id="setup-error", classes="error-label")
             with Horizontal(classes="action-bar"):
                 yield Button("Continue", variant="primary", id="setup-continue")
@@ -129,6 +131,31 @@ class ScropipeApp(App):
         """Switch to the specified tab."""
         tabbed = self.query_one(TabbedContent)
         tabbed.active = tab_id
+
+    def on_tabbed_content_tab_activated(
+        self, event: TabbedContent.TabActivated
+    ) -> None:
+        """Refresh tab data when switching tabs."""
+        tab_id = event.pane.id
+        if tab_id == "tab-train":
+            try:
+                config = self.query_one("#train-config")
+                config._populate_pools()
+            except Exception:
+                pass
+        elif tab_id == "tab-split":
+            try:
+                split_tab = self.query_one("SplitTab")
+                if hasattr(split_tab, '_refresh_pools'):
+                    split_tab._refresh_pools()
+            except Exception:
+                pass
+        elif tab_id == "tab-generate":
+            try:
+                gen_tab = self.query_one("GenerateTab")
+                gen_tab._refresh_models()
+            except Exception:
+                pass
 
     def watch_active_pool(self) -> None:
         self._update_status_bar()

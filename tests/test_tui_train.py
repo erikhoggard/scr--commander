@@ -137,3 +137,36 @@ async def test_train_tab_dashboard_has_single_stop_button(app):
         assert app.query_one("#stop-training-btn") is not None
         assert len(app.query("#stop-save-btn")) == 0
         assert len(app.query("#stop-discard-btn")) == 0
+
+
+@pytest.mark.asyncio
+async def test_train_tab_refreshes_pools_on_tab_switch(tmp_path):
+    """Train tab should refresh pool data when switched to."""
+    from scropipe.pool_manager import PoolManager
+
+    pools_dir = tmp_path / "pools"
+    pools_dir.mkdir()
+    models_dir = tmp_path / "models"
+    models_dir.mkdir()
+
+    app = ScropipeApp(models_dir=models_dir, pools_dir=pools_dir)
+    async with app.run_test() as pilot:
+        # Start on split tab
+        tabbed = app.query_one("TabbedContent")
+        tabbed.active = "tab-split"
+        await pilot.pause()
+
+        # Create a pool while on split tab
+        pm = PoolManager(pools_dir)
+        pm.create_pool("test-pool")
+
+        # Switch to train tab
+        tabbed.active = "tab-train"
+        await pilot.pause()
+
+        # Pool selector should show the new pool
+        from textual.widgets import Select
+        pool_select = app.query_one("#train-pool-select", Select)
+        # _options is a list of (prompt, value) tuples
+        option_values = [opt[1] for opt in pool_select._options]
+        assert "test-pool" in option_values
