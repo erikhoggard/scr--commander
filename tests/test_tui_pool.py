@@ -61,3 +61,43 @@ async def test_pool_tab_has_sources_list(app):
         await pilot.pause()
         sources = app.query_one("#pool-sources-list")
         assert sources is not None
+
+
+@pytest.mark.asyncio
+async def test_pool_add_files_opens_browse_modal(app):
+    from scropipe.pool_manager import PoolManager
+    pm = PoolManager(app.pools_dir)
+    pm.create_pool("test-pool")
+
+    async with app.run_test() as pilot:
+        tabbed = app.query_one("TabbedContent")
+        tabbed.active = "tab-pool"
+        await pilot.pause()
+        pool_list = app.query_one("#pool-list")
+        if pool_list.children:
+            pool_list.index = 0
+            await pilot.pause()
+        await pilot.click("#add-files-btn")
+        await pilot.pause()
+        from scropipe.tui.browse_modal import BrowseModal
+        assert any(isinstance(s, BrowseModal) for s in app.screen_stack)
+
+
+@pytest.mark.asyncio
+async def test_pool_add_dir_opens_browse_modal(app):
+    from scropipe.pool_manager import PoolManager
+    pm = PoolManager(app.pools_dir)
+    pm.create_pool("test-pool")
+
+    async with app.run_test() as pilot:
+        tabbed = app.query_one("TabbedContent")
+        tabbed.active = "tab-pool"
+        await pilot.pause()
+        pool_list = app.query_one("#pool-list")
+        if pool_list.children:
+            pool_list.index = 0
+            await pilot.pause()
+        await pilot.click("#add-dir-btn")
+        await pilot.pause()
+        from scropipe.tui.browse_modal import BrowseModal
+        assert any(isinstance(s, BrowseModal) for s in app.screen_stack)

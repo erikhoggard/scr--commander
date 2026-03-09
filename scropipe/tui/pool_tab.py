@@ -9,6 +9,9 @@ from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Button, Input, Label, ListItem, ListView, Static
 
+from .browse_modal import BrowseModal
+from .path_suggester import PathSuggester
+
 
 class NewPoolModal(ModalScreen[str | None]):
     """Modal dialog for creating a new pool."""
@@ -84,7 +87,7 @@ class FileInputModal(ModalScreen[str | None]):
     def compose(self) -> ComposeResult:
         with Vertical():
             yield Label(self._title_text)
-            yield Input(placeholder=self._placeholder, id="file-path-input")
+            yield Input(placeholder=self._placeholder, id="file-path-input", suggester=PathSuggester())
             with Horizontal(classes="action-bar"):
                 yield Button("OK", variant="primary", id="file-ok-btn")
                 yield Button("Cancel", id="file-cancel-btn")
@@ -231,18 +234,26 @@ class PoolTab(Static):
                 NewPoolModal(), callback=self._on_new_pool_dismiss
             )
         elif event.button.id == "add-files-btn":
+            pool_name = self._get_selected_pool_name()
+            if pool_name is None:
+                return
             self.app.push_screen(
-                FileInputModal(
+                BrowseModal(
                     title="Add Files",
-                    placeholder="Enter file paths (one per line)",
+                    select_type="file",
+                    start_path=self.app.pools_dir,
                 ),
                 callback=self._on_add_files_dismiss,
             )
         elif event.button.id == "add-dir-btn":
+            pool_name = self._get_selected_pool_name()
+            if pool_name is None:
+                return
             self.app.push_screen(
-                FileInputModal(
+                BrowseModal(
                     title="Add Directory",
-                    placeholder="Enter directory path",
+                    select_type="directory",
+                    start_path=self.app.pools_dir,
                 ),
                 callback=self._on_add_dir_dismiss,
             )
@@ -262,34 +273,31 @@ class PoolTab(Static):
         except ValueError:
             pass  # Pool already exists
 
-    def _on_add_files_dismiss(self, path_str: str | None) -> None:
+    def _on_add_files_dismiss(self, path: Path | None) -> None:
         """Handle add files modal result."""
-        if path_str is None:
+        if path is None:
             return
         pool_name = self._get_selected_pool_name()
         if pool_name is None:
             return
-        paths = [Path(p.strip()) for p in path_str.splitlines() if p.strip()]
-        if not paths:
-            return
         try:
             pm = self._get_pool_manager()
-            pm.add_files(pool_name, paths)
+            pm.add_files(pool_name, [path])
             self._refresh_pool_list()
             self._show_pool_details(pool_name)
         except Exception:
             pass
 
-    def _on_add_dir_dismiss(self, path_str: str | None) -> None:
+    def _on_add_dir_dismiss(self, path: Path | None) -> None:
         """Handle add directory modal result."""
-        if path_str is None:
+        if path is None:
             return
         pool_name = self._get_selected_pool_name()
         if pool_name is None:
             return
         try:
             pm = self._get_pool_manager()
-            pm.add_directory(pool_name, Path(path_str))
+            pm.add_directory(pool_name, path)
             self._refresh_pool_list()
             self._show_pool_details(pool_name)
         except Exception:
