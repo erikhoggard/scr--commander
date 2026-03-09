@@ -10,7 +10,6 @@ from textual.screen import ModalScreen
 from textual.widgets import Button, Input, Label, ListItem, ListView, Static
 
 from .browse_modal import BrowseModal
-from .path_suggester import PathSuggester
 
 
 class NewPoolModal(ModalScreen[str | None]):
@@ -49,54 +48,6 @@ class NewPoolModal(ModalScreen[str | None]):
             name = self.query_one("#new-pool-name", Input).value.strip()
             self.dismiss(name if name else None)
         elif event.button.id == "cancel-pool-btn":
-            self.dismiss(None)
-
-
-class FileInputModal(ModalScreen[str | None]):
-    """Modal dialog for entering a file or directory path."""
-
-    DEFAULT_CSS = """
-    FileInputModal {
-        align: center middle;
-    }
-
-    FileInputModal > Vertical {
-        width: 60;
-        height: auto;
-        max-height: 14;
-        border: thick $accent;
-        background: $surface;
-        padding: 1 2;
-    }
-
-    FileInputModal Input {
-        margin-bottom: 1;
-    }
-    """
-
-    def __init__(
-        self,
-        title: str = "Enter Path",
-        placeholder: str = "Enter path...",
-        **kwargs,
-    ) -> None:
-        super().__init__(**kwargs)
-        self._title_text = title
-        self._placeholder = placeholder
-
-    def compose(self) -> ComposeResult:
-        with Vertical():
-            yield Label(self._title_text)
-            yield Input(placeholder=self._placeholder, id="file-path-input", suggester=PathSuggester())
-            with Horizontal(classes="action-bar"):
-                yield Button("OK", variant="primary", id="file-ok-btn")
-                yield Button("Cancel", id="file-cancel-btn")
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "file-ok-btn":
-            value = self.query_one("#file-path-input", Input).value.strip()
-            self.dismiss(value if value else None)
-        elif event.button.id == "file-cancel-btn":
             self.dismiss(None)
 
 
