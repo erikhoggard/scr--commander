@@ -1,7 +1,7 @@
 # tests/test_rave_runner.py
 from pathlib import Path
 
-from scropipe.tui.rave_runner import build_preprocess_cmd, build_train_cmd
+from scropipe.tui.rave_runner import build_export_cmd, build_preprocess_cmd, build_train_cmd
 
 
 def test_build_preprocess_cmd():
@@ -71,3 +71,13 @@ def test_build_train_cmd_with_gpu():
     )
     assert "--gpu" in cmd
     assert "0" in cmd
+
+
+def test_build_export_cmd_basic():
+    cmd = build_export_cmd("rave", "/path/to/run")
+    assert cmd == ["rave", "export", "--run", "/path/to/run"]
+
+
+def test_build_export_cmd_streaming():
+    cmd = build_export_cmd("rave", "/path/to/run", streaming=True)
+    assert "--streaming" in cmd
