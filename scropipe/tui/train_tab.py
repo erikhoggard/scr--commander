@@ -684,7 +684,14 @@ class TrainTab(Static):
         from ..utils.rave_compat import wrap_rave_cmd
         from .rave_runner import build_export_cmd
 
-        cmd = wrap_rave_cmd(build_export_cmd(rave_cmd, str(output_dir)))
+        # RAVE export needs the run dir containing config.gin, not the
+        # top-level training_output dir.
+        config_files = list(output_dir.glob("**/config.gin"))
+        if not config_files:
+            return False
+        rave_run_dir = config_files[0].parent
+
+        cmd = wrap_rave_cmd(build_export_cmd(rave_cmd, str(rave_run_dir)))
         try:
             result = subprocess.run(cmd, check=False, capture_output=True, text=True)
             if result.returncode != 0:
@@ -693,7 +700,7 @@ class TrainTab(Static):
             return False
 
         # Find exported .ts file
-        ts_files = list(output_dir.glob("**/*.ts"))
+        ts_files = list(rave_run_dir.glob("*.ts")) or list(output_dir.glob("**/*.ts"))
         if not ts_files:
             return False
 
