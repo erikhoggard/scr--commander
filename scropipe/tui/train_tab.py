@@ -57,7 +57,7 @@ class TrainConfigPanel(Static):
 
             yield Label("Architecture", classes="section-title")
             yield Select(
-                [("v2", "v2"), ("v2_small", "v2_small"), ("discrete", "discrete")],
+                [("v2", "v2"), ("v1", "v1"), ("discrete", "discrete"), ("causal", "causal")],
                 id="train-arch-select",
                 value="v2",
             )
@@ -137,27 +137,27 @@ class TrainDashboard(Static):
 
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
-        self._loss_data: list[float] = []
+        self._step_data: list[float] = []
 
     def compose(self) -> ComposeResult:
         with Vertical():
             yield Label("Training...", id="dash-title")
             yield Static("Pool: - | Architecture: -", id="dash-info")
-            yield Static("Step: 0 | Loss: - | Delta: -", id="dash-metrics")
+            yield Static("Step: 0 | Epoch: 0", id="dash-metrics")
             yield Sparkline([], id="dash-sparkline")
             yield Static("Elapsed: 0:00 | ETA: -", id="dash-timing")
             yield Static("No checkpoints yet", id="dash-checkpoint")
             with Horizontal(classes="action-bar"):
                 yield Button("Stop Training", variant="warning", id="stop-training-btn")
 
-    def update_metrics(self, step: int, loss: float, delta: float) -> None:
+    def update_metrics(self, step: int, epoch: int, pct: int) -> None:
         """Update the dashboard metrics display and sparkline."""
         metrics = self.query_one("#dash-metrics", Static)
-        metrics.update(f"Step: {step} | Loss: {loss:.6f} | Delta: {delta:.6f}")
+        metrics.update(f"Step: {step} | Epoch: {epoch} | {pct}%")
 
-        self._loss_data.append(loss)
+        self._step_data.append(float(step))
         sparkline = self.query_one("#dash-sparkline", Sparkline)
-        sparkline.data = self._loss_data
+        sparkline.data = self._step_data
 
     def set_info(self, pool_name: str, architecture: str) -> None:
         """Set the info line with pool and architecture details."""
@@ -181,10 +181,10 @@ class TrainDashboard(Static):
 
     def reset(self) -> None:
         """Reset dashboard state for a new training run."""
-        self._loss_data = []
+        self._step_data = []
         self.query_one("#dash-title", Label).update("Training...")
         self.query_one("#dash-info", Static).update("Pool: - | Architecture: -")
-        self.query_one("#dash-metrics", Static).update("Step: 0 | Loss: - | Delta: -")
+        self.query_one("#dash-metrics", Static).update("Step: 0 | Epoch: 0 | 0%")
         self.query_one("#dash-sparkline", Sparkline).data = []
         self.query_one("#dash-timing", Static).update("Elapsed: 0:00 | ETA: -")
         self.query_one("#dash-checkpoint", Static).update("No checkpoints yet")
@@ -352,8 +352,9 @@ class TrainTab(Static):
         from ..pool_manager import PoolManager
         from ..training_state import TrainingRunInfo, save_training_run
         from ..utils.discovery import ToolNotFoundError, find_tool
+        from ..utils.rave_compat import wrap_rave_cmd
         from .rave_parser import parse_training_line
-        from .rave_runner import build_preprocess_cmd, build_train_cmd
+        from .rave_runner import build_preprocess_cmd, build_train_cmd, prepare_samples
 
         dashboard = self.query_one("#train-dashboard", TrainDashboard)
         start_time = time.time()
@@ -407,24 +408,68 @@ class TrainTab(Static):
         output_dir = run_dir / "training_output"
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        # Preprocessing (skip if already done or resuming)
+        # Preprocessing (skip only if a valid metadata.yaml exists).
+        # LMDB creates the directory on open, and RAVE truncates
+        # metadata.yaml before writing — so a failed preprocess leaves
+        # an empty file.  We must check the *content* is valid.
         preprocess_dir = output_dir / "preprocessed"
-        if ckpt_path is None and not preprocess_dir.exists():
+        metadata_path = preprocess_dir / "metadata.yaml"
+        preprocess_done = False
+        if metadata_path.exists():
+            try:
+                import yaml
+                with open(metadata_path) as f:
+                    meta = yaml.safe_load(f)
+                if isinstance(meta, dict) and "lazy" in meta:
+                    preprocess_done = True
+            except Exception:
+                pass
+        if ckpt_path is None and not preprocess_done:
+            # Remove stale/incomplete preprocessed directory so LMDB
+            # doesn't conflict with the fresh preprocess run.
+            if preprocess_dir.exists():
+                import shutil
+                shutil.rmtree(preprocess_dir, ignore_errors=True)
+
+            # Concatenate short files if needed — RAVE v2 requires
+            # num_signal=131072 (~3s) and silently drops shorter files.
+            self.app.call_from_thread(
+                self._update_status, "Preparing audio..."
+            )
+            try:
+                preprocess_input = prepare_samples(
+                    samples_dir, output_dir,
+                    pool_dir=pools_dir / pool_name,
+                )
+            except Exception as e:
+                self.app.call_from_thread(
+                    self._update_status,
+                    f"Error preparing samples: {e}",
+                )
+                self.app.call_from_thread(self._switch_to_config)
+                return
+
             self.app.call_from_thread(
                 self._update_status, "Preprocessing audio..."
             )
-            cmd = build_preprocess_cmd(
-                rave_cmd, samples_dir, preprocess_dir
-            )
+            cmd = wrap_rave_cmd(build_preprocess_cmd(
+                rave_cmd, preprocess_input, preprocess_dir,
+            ))
             try:
                 result = subprocess.run(
                     cmd, check=False, capture_output=True, text=True
                 )
                 if result.returncode != 0:
+                    detail = (result.stderr or result.stdout or "")
+                    # Show last meaningful line of output
+                    detail_lines = [
+                        l for l in detail.strip().splitlines() if l.strip()
+                    ]
+                    hint = detail_lines[-1] if detail_lines else ""
                     self.app.call_from_thread(
                         self._update_status,
                         "Error: Preprocessing failed "
-                        f"(exit {result.returncode}).",
+                        f"(exit {result.returncode}). {hint}",
                     )
                     self.app.call_from_thread(self._switch_to_config)
                     return
@@ -451,7 +496,7 @@ class TrainTab(Static):
         except ImportError:
             pass
 
-        cmd = build_train_cmd(
+        cmd = wrap_rave_cmd(build_train_cmd(
             rave_cmd=rave_cmd,
             config=architecture,
             data_dir=data_dir,
@@ -460,7 +505,7 @@ class TrainTab(Static):
             max_steps=max_steps,
             gpu=gpu,
             ckpt=ckpt_path,
-        )
+        ))
 
         # Save sidecar
         run_info = TrainingRunInfo(
@@ -497,16 +542,26 @@ class TrainTab(Static):
         # Capture local reference to avoid race with _stop_training
         proc = self._training_process
 
+        # Open a log file so the user can inspect full output
+        log_path = output_dir / "train.log"
+        log_file = log_path.open("a", encoding="utf-8")
+
         # Read stdout and parse metrics
         last_step = 0
-        prev_loss = 0.0
+        # Keep recent unparsed lines so we can show errors on failure
+        from collections import deque
+        recent_output: deque[str] = deque(maxlen=20)
         try:
             for line in proc.stdout:
+                log_file.write(line)
                 if self._stop_requested.is_set():
                     break
 
                 parsed = parse_training_line(line)
                 if parsed is None:
+                    stripped = line.strip()
+                    if stripped:
+                        recent_output.append(stripped)
                     continue
 
                 if parsed.get("checkpoint"):
@@ -516,20 +571,22 @@ class TrainTab(Static):
                     )
                     continue
 
+                if parsed.get("validation"):
+                    continue
+
                 step = parsed.get("step", last_step)
-                loss = parsed.get("loss", 0.0)
-                delta = (
-                    abs(loss - prev_loss)
-                    if prev_loss > 0
-                    else 0.0
-                )
+                epoch = parsed.get("epoch", 0)
+                pct = parsed.get("pct", 0)
+
+                # Only update on meaningful progress (not every duplicate line)
+                if step == last_step:
+                    continue
 
                 last_step = step
-                prev_loss = loss
 
                 try:
                     self.app.call_from_thread(
-                        dashboard.update_metrics, step, loss, delta
+                        dashboard.update_metrics, step, epoch, pct
                     )
 
                     elapsed = time.time() - start_time
@@ -544,14 +601,10 @@ class TrainTab(Static):
                 except Exception:
                     break
 
-                # Check delta stop condition
-                if stop_condition == "delta_target" and stop_value:
-                    if delta > 0 and delta < float(stop_value):
-                        self._stop_requested.set()
-                        break
-
         except Exception:
             pass
+        finally:
+            log_file.close()
 
         # Wait for process to finish (use local ref to avoid race)
         try:
@@ -570,22 +623,99 @@ class TrainTab(Static):
                 "Checkpoints preserved.",
             )
         elif returncode == 0:
-            run_info.status = "completed"
-            save_training_run(run_info, run_dir)
+            # Export model so it appears on the Generate tab
             self.app.call_from_thread(
                 self._update_status,
-                f"Training complete at step {last_step}.",
+                f"Training complete. Exporting model...",
             )
+
+            export_success = self._export_model(
+                rave_cmd, output_dir, run_dir, model_name, pool_name, architecture,
+            )
+
+            run_info.status = "completed"
+            save_training_run(run_info, run_dir)
+
+            if export_success:
+                self.app.call_from_thread(
+                    self._update_status,
+                    f"Model '{model_name}' ready on Generate tab.",
+                )
+            else:
+                self.app.call_from_thread(
+                    self._update_status,
+                    f"Training complete but export failed. "
+                    f"Run 'scropipe export {model_name}' manually.",
+                )
         else:
             run_info.status = "paused"
             save_training_run(run_info, run_dir)
+            # Include last lines of output so the user can see why it failed
+            error_detail = ""
+            if recent_output:
+                error_detail = " | " + " ".join(
+                    list(recent_output)[-3:]
+                )
             self.app.call_from_thread(
                 self._update_status,
-                f"Training stopped (exit {returncode}). "
-                "Checkpoints preserved.",
+                f"Training failed (exit {returncode}). "
+                f"See {log_path}{error_detail}",
             )
 
         self.app.call_from_thread(self._switch_to_config)
+
+    def _export_model(
+        self,
+        rave_cmd: str,
+        output_dir: Path,
+        run_dir: Path,
+        model_name: str,
+        pool_name: str,
+        architecture: str,
+    ) -> bool:
+        """Export trained model to model.ts + metadata.json.
+
+        Returns True on success, False on failure.
+        """
+        import json
+        import shutil
+        from datetime import datetime
+
+        from ..utils.rave_compat import wrap_rave_cmd
+        from .rave_runner import build_export_cmd
+
+        cmd = wrap_rave_cmd(build_export_cmd(rave_cmd, str(output_dir)))
+        try:
+            result = subprocess.run(cmd, check=False, capture_output=True, text=True)
+            if result.returncode != 0:
+                return False
+        except Exception:
+            return False
+
+        # Find exported .ts file
+        ts_files = list(output_dir.glob("**/*.ts"))
+        if not ts_files:
+            return False
+
+        try:
+            # Copy to model.ts in run_dir
+            final_path = run_dir / "model.ts"
+            shutil.copy2(ts_files[0], final_path)
+
+            # Write metadata.json
+            metadata = {
+                "name": model_name,
+                "created": datetime.now().isoformat(),
+                "config": architecture,
+                "total_samples": 0,
+                "pool_name": pool_name,
+            }
+            metadata_path = run_dir / "metadata.json"
+            metadata_path.write_text(json.dumps(metadata, indent=2))
+        except Exception:
+            return False
+
+        return True
 
     def _stop_training(self) -> None:
         """Stop the training process gracefully via SIGINT."""
