@@ -170,3 +170,42 @@ async def test_train_tab_refreshes_pools_on_tab_switch(tmp_path):
         # _options is a list of (prompt, value) tuples
         option_values = [opt[1] for opt in pool_select._options]
         assert "test-pool" in option_values
+
+
+@pytest.mark.asyncio
+async def test_train_tab_has_resume_run_selector(app):
+    async with app.run_test() as pilot:
+        tabbed = app.query_one("TabbedContent")
+        tabbed.active = "tab-train"
+        await pilot.pause()
+        select = app.query_one("#resume-run-select")
+        assert select is not None
+
+
+@pytest.mark.asyncio
+async def test_train_tab_resume_selector_populates_with_paused_runs(app, tmp_path):
+    """When paused runs exist, the resume selector should list them."""
+    from scropipe.training_state import TrainingRunInfo, save_training_run
+
+    models_dir = tmp_path / "models"
+    run_dir = models_dir / "my-paused-model"
+    run_dir.mkdir(parents=True)
+    run = TrainingRunInfo(
+        model_name="my-paused-model",
+        pool_name="drums",
+        architecture="v2",
+        output_dir=str(run_dir / "training_output"),
+        status="paused",
+    )
+    save_training_run(run, run_dir)
+
+    async with app.run_test() as pilot:
+        tabbed = app.query_one("TabbedContent")
+        tabbed.active = "tab-train"
+        await pilot.pause()
+        config = app.query_one("#train-config")
+        config._populate_resumable_runs()
+        await pilot.pause()
+        select = app.query_one("#resume-run-select")
+        # Should have at least one option
+        assert len(select._options) > 0

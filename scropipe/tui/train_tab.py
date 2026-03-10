@@ -67,13 +67,17 @@ class TrainConfigPanel(Static):
 
             yield Static("GPU: detecting...", id="train-gpu-info")
 
+            yield Label("Resume Run", classes="section-title")
+            yield Select([], id="resume-run-select", prompt="Select a paused run")
+
             with Horizontal(classes="action-bar"):
                 yield Button("Start Training", variant="primary", id="start-training-btn")
                 yield Button("Resume Training", variant="default", id="resume-training-btn")
 
     def on_mount(self) -> None:
-        """Populate pool list and detect GPU on mount."""
+        """Populate pool list, resumable runs, and detect GPU on mount."""
         self._populate_pools()
+        self._populate_resumable_runs()
         self._detect_gpu()
 
     def _populate_pools(self) -> None:
@@ -88,6 +92,25 @@ class TrainConfigPanel(Static):
             pool_select.set_options(options)
         except Exception:
             pool_select.set_options([])
+
+    def _populate_resumable_runs(self) -> None:
+        """Load paused training runs into the resume selector."""
+        from ..training_state import list_paused_runs
+
+        select = self.query_one("#resume-run-select", Select)
+        models_dir = getattr(self.app, "models_dir", None)
+        if models_dir is None:
+            select.set_options([])
+            return
+        try:
+            paused = list_paused_runs(models_dir)
+            options = [
+                (f"{r.model_name} ({r.architecture}, {r.status})", r.model_name)
+                for r in paused
+            ]
+            select.set_options(options)
+        except Exception:
+            select.set_options([])
 
     def _detect_gpu(self) -> None:
         """Detect GPU and update the info label."""
@@ -226,7 +249,9 @@ class TrainTab(Static):
     def _switch_to_config(self) -> None:
         """Switch from dashboard view to config view."""
         self.query_one("#train-dashboard", TrainDashboard).display = False
-        self.query_one("#train-config", TrainConfigPanel).display = True
+        config = self.query_one("#train-config", TrainConfigPanel)
+        config.display = True
+        config._populate_resumable_runs()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         """Handle button presses for training controls."""
@@ -238,7 +263,7 @@ class TrainTab(Static):
             self._stop_training()
 
     def _resume_training(self) -> None:
-        """Show resumable runs and resume the selected one."""
+        """Resume training for the selected paused run."""
         from ..training_state import find_checkpoint_dir, list_paused_runs
 
         models_dir = getattr(self.app, "models_dir", None)
@@ -246,13 +271,27 @@ class TrainTab(Static):
             self._update_status("Error: Models directory not configured.")
             return
 
-        paused = list_paused_runs(models_dir)
-        if not paused:
-            self._update_status("No paused training runs found.")
+        # Read selection from the resume-run-select dropdown
+        config = self.query_one("#train-config", TrainConfigPanel)
+        select = config.query_one("#resume-run-select", Select)
+        if select.value is Select.BLANK:
+            self._update_status("Please select a run to resume.")
             return
 
-        # Resume the most recent paused run
-        run = paused[-1]
+        selected_name = str(select.value)
+
+        # Find the matching run
+        paused = list_paused_runs(models_dir)
+        run = None
+        for r in paused:
+            if r.model_name == selected_name:
+                run = r
+                break
+
+        if run is None:
+            self._update_status(f"Run '{selected_name}' not found or no longer paused.")
+            return
+
         output_dir = Path(run.output_dir)
 
         ckpt_dir = find_checkpoint_dir(output_dir)

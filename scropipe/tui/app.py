@@ -141,6 +141,7 @@ class ScropipeApp(App):
             try:
                 config = self.query_one("#train-config")
                 config._populate_pools()
+                config._populate_resumable_runs()
             except Exception:
                 pass
         elif tab_id == "tab-split":
