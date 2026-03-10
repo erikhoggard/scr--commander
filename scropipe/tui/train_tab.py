@@ -561,13 +561,18 @@ class TrainTab(Static):
             self._update_status, f"Training {model_name}..."
         )
         try:
-            self._training_process = subprocess.Popen(
-                cmd,
+            import sys
+            popen_kwargs = dict(
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
                 cwd=str(output_dir),
             )
+            if sys.platform == "win32":
+                # Create in own process group so CTRL_BREAK_EVENT
+                # targets only this subprocess, not the TUI.
+                popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+            self._training_process = subprocess.Popen(cmd, **popen_kwargs)
         except Exception as e:
             self.app.call_from_thread(
                 self._update_status,
@@ -769,8 +774,14 @@ class TrainTab(Static):
 
         if self._training_process is not None:
             try:
-                self._training_process.send_signal(signal.SIGINT)
-            except (ProcessLookupError, OSError):
+                # On Windows, SIGINT is not supported; use CTRL_BREAK_EVENT
+                # which works on subprocesses created without CREATE_NEW_PROCESS_GROUP.
+                import sys
+                if sys.platform == "win32":
+                    self._training_process.send_signal(signal.CTRL_BREAK_EVENT)
+                else:
+                    self._training_process.send_signal(signal.SIGINT)
+            except (ProcessLookupError, OSError, ValueError):
                 pass
             # Offload blocking wait to a thread to avoid freezing the UI
             proc = self._training_process
