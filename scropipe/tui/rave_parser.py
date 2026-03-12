@@ -5,47 +5,60 @@ from __future__ import annotations
 import re
 from typing import Optional
 
-# Epoch progress: "Epoch 0:  50%|███| 500/1000 [01:23<01:23, 6.00it/s, loss=0.123]"
+# Epoch progress bar (actual RAVE output):
+#   "Epoch 51:  43%|####2     | 15/35 [00:01<00:01, 13.84it/s, v_num=0]"
 _EPOCH_RE = re.compile(
-    r"Epoch\s+\d+:\s+\d+%\|[^|]*\|\s*(\d+)/\d+\s*\[.*?loss=([\d.]+)"
+    r"Epoch\s+(\d+):\s+(\d+)%\|[^|]*\|\s*(\d+)/(\d+)\s*\["
 )
 
-# Step-level log: "Step 1500: loss=0.0891"
-_STEP_RE = re.compile(r"Step\s+(\d+):\s*loss=([\d.]+)")
+# Checkpoint save: "saving model to '...'" or ModelCheckpoint messages
+_CKPT_RE = re.compile(r"saving model to|ModelCheckpoint")
 
-# Checkpoint save: "saving model to '...'"
-_CKPT_RE = re.compile(r"saving model to")
+# Validation line: "Validation DataLoader" or "Sanity Checking"
+_VAL_RE = re.compile(r"Validation|Sanity Checking")
 
 
 def parse_training_line(line: str) -> Optional[dict]:
     """Parse a single line of RAVE training output.
 
     Returns:
-        Dict with parsed info (step, loss, checkpoint), or None if
-        the line doesn't contain training metrics.
+        Dict with parsed info, or None if the line doesn't contain
+        training metrics.  Possible keys:
+
+        - ``epoch``  – current epoch number
+        - ``step``   – global step (epoch * steps_per_epoch + batch)
+        - ``batch``  – batch index within the epoch
+        - ``steps_per_epoch`` – total batches per epoch
+        - ``pct``    – percentage complete within the epoch
+        - ``checkpoint`` – True when a checkpoint is saved
+        - ``validation`` – True for validation lines
     """
     line = line.strip()
     if not line:
         return None
 
-    # Check for checkpoint save
+    # Checkpoint
     if _CKPT_RE.search(line):
         return {"checkpoint": True}
 
-    # Check epoch progress
+    # Validation (skip, don't count as training steps)
+    if _VAL_RE.search(line):
+        return {"validation": True}
+
+    # Epoch progress
     m = _EPOCH_RE.search(line)
     if m:
+        epoch = int(m.group(1))
+        pct = int(m.group(2))
+        batch = int(m.group(3))
+        steps_per_epoch = int(m.group(4))
+        global_step = epoch * steps_per_epoch + batch
         return {
-            "step": int(m.group(1)),
-            "loss": float(m.group(2)),
-        }
-
-    # Check step-level log
-    m = _STEP_RE.search(line)
-    if m:
-        return {
-            "step": int(m.group(1)),
-            "loss": float(m.group(2)),
+            "epoch": epoch,
+            "step": global_step,
+            "batch": batch,
+            "steps_per_epoch": steps_per_epoch,
+            "pct": pct,
         }
 
     return None

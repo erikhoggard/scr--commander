@@ -2,27 +2,31 @@ from scropipe.tui.rave_parser import parse_training_line
 
 
 def test_parse_epoch_line():
-    # Lightning 1.9 style progress line
-    line = "Epoch 0:  50%|█████     | 500/1000 [01:23<01:23, 6.00it/s, loss=0.123]"
+    # Actual RAVE output format (v_num, no loss on stdout)
+    line = "Epoch 0:  50%|█████     | 500/1000 [01:23<01:23, 6.00it/s, v_num=0]"
     result = parse_training_line(line)
     assert result is not None
-    assert result["step"] == 500
-    assert abs(result["loss"] - 0.123) < 1e-6
+    assert result["epoch"] == 0
+    assert result["batch"] == 500
+    assert result["steps_per_epoch"] == 1000
+    assert result["step"] == 500  # epoch * steps_per_epoch + batch
+    assert result["pct"] == 50
 
 
 def test_parse_epoch_line_v2():
-    # Another common Lightning format
-    line = "Epoch 1:  10%|█         | 100/1000 [00:30<04:30, 3.33it/s, loss=0.456]"
+    # Second epoch
+    line = "Epoch 1:  10%|█         | 100/1000 [00:30<04:30, 3.33it/s, v_num=0]"
     result = parse_training_line(line)
     assert result is not None
-    assert result["step"] == 100
+    assert result["epoch"] == 1
+    assert result["step"] == 1100  # 1 * 1000 + 100
 
 
 def test_parse_validation_line():
     line = "Validation: 100%|██████████| 10/10 [00:05<00:00, 2.00it/s]"
     result = parse_training_line(line)
-    # Validation lines don't have loss — return None
-    assert result is None
+    assert result is not None
+    assert result.get("validation") is True
 
 
 def test_parse_checkpoint_line():
@@ -42,12 +46,11 @@ def test_parse_unrelated_line():
     assert result is None
 
 
-def test_parse_step_log_line():
-    # Some Lightning configs log step-level metrics
-    line = "Step 1500: loss=0.0891"
+def test_parse_sanity_checking():
+    line = "Sanity Checking: 100%|██████████| 2/2 [00:01<00:00, 1.50it/s]"
     result = parse_training_line(line)
     assert result is not None
-    assert result["step"] == 1500
+    assert result.get("validation") is True
 
 
 def test_parse_empty_line():

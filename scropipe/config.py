@@ -82,7 +82,8 @@ def save_config(config: ScropipeConfig, path: Optional[Path] = None) -> None:
     for field in fields(config):
         value = getattr(config, field.name)
         if value is not None:
-            lines.append(f'{field.name} = "{value}"')
+            # Use forward slashes so TOML doesn't treat backslashes as escapes
+            lines.append(f'{field.name} = "{str(value).replace(chr(92), "/")}"')
 
     path.write_text("\n".join(lines) + "\n")
 

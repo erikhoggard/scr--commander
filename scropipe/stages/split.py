@@ -88,8 +88,9 @@ class SplitStage(Stage):
         # Derive source name from filename if not provided
         if source_name is None:
             source_name = input_file.stem
-        # Sanitize the name
-        source_name = source_name.replace(" ", "_").replace(".", "_")
+        # Sanitize the name — must match SampleProcessor's sanitization
+        # (filepath.stem.replace('.', '_')) so we can find the output dir.
+        source_name = source_name.replace(".", "_")
 
         # Import the splitter module
         try:
@@ -100,10 +101,11 @@ class SplitStage(Stage):
                 message=f"Failed to import splitter: {e}",
             )
 
-        # Create output directory for this specific source
-        self.ensure_output_dir()  # Ensure base "splits" directory exists
-        source_output_dir = self.get_split_output_dir(source_name)
-        source_output_dir.mkdir(parents=True, exist_ok=True)
+        # SampleProcessor internally creates a subdirectory named after the
+        # file stem, so we pass self.output_dir (the "splits" directory) and
+        # let the processor create the source_name level itself.
+        self.ensure_output_dir()
+        source_output_dir = self.output_dir
 
         # Calculate chunk_length from BPM if specified
         final_chunk_length = chunk_length
@@ -136,13 +138,16 @@ class SplitStage(Stage):
             )
             processor.process_single_file(input_file, modes=[mode], args=args)
 
-            # Find output files - splitter creates subdirectories
-            wav_files = list(source_output_dir.rglob("*.wav"))
+            # Find output files under the source subdirectory that
+            # SampleProcessor created (output_dir / sanitized_stem / ...).
+            # The sanitized stem matches source_name since we already sanitized it.
+            actual_output = source_output_dir / source_name
+            wav_files = list(actual_output.rglob("*.wav")) if actual_output.exists() else []
 
             if not wav_files:
                 return StageResult(
                     success=False,
-                    output_dir=source_output_dir,
+                    output_dir=actual_output,
                     message="No samples generated",
                 )
 
@@ -150,7 +155,7 @@ class SplitStage(Stage):
 
             return StageResult(
                 success=True,
-                output_dir=source_output_dir,
+                output_dir=actual_output,
                 message=f"Generated {len(wav_files)} samples",
                 details={
                     "sample_count": len(wav_files),
